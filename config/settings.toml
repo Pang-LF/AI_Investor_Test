@@ -7,6 +7,32 @@ max_tool_calls_per_run = 4
 max_estimated_cost_per_run_usd = 0.05
 max_monthly_llm_budget_usd = 2.50
 
+[monitor]
+interval_minutes = 15
+universe_size = 60
+quote_batch_size = 20
+max_mcp_calls_per_cycle = 8
+quote_batch_delay_seconds = 1.0
+market_timezone = "America/New_York"
+core_target = 33
+event_target = 10
+position_reserve = 5
+core_min_price = 10.0
+core_min_market_cap = 5000000000
+core_min_average_volume = 1000000
+core_min_average_dollar_volume = 100000000
+event_min_market_cap = 1000000000
+event_min_average_volume = 500000
+event_min_relative_volume = 1.25
+event_min_absolute_change = 0.02
+general_move_trigger = 0.02
+position_move_trigger = 0.01
+fixed_etfs = [
+  "SPY", "QQQ", "IWM", "RSP",
+  "XLK", "XLF", "XLV", "XLY",
+  "XLP", "XLI", "XLE", "XLU",
+]
+
 [risk]
 allow_margin = false
 allow_options = false

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pang.ai-investor.monitor</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__AI_INVESTOR_EXECUTABLE__</string>
+    <string>monitor-cycle</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__AI_INVESTOR_ROOT__</string>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__AI_INVESTOR_STDOUT__</string>
+  <key>StandardErrorPath</key>
+  <string>__AI_INVESTOR_STDERR__</string>
+</dict>
+</plist>

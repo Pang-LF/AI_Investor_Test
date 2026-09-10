@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from .config import Settings
 from .credential_store import set_openai_api_key
+from .monitor import run_monitor_cycle
 from .robinhood_oauth import RobinhoodOAuth
 from .robinhood_readonly import get_account_snapshot
 
@@ -23,6 +25,17 @@ def main() -> None:
     subparsers.add_parser("oauth-status")
     subparsers.add_parser("set-openai-key")
     subparsers.add_parser("account-snapshot")
+    monitor_parser = subparsers.add_parser("monitor-cycle")
+    monitor_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Run outside regular market hours for a read-only connectivity test.",
+    )
+    monitor_parser.add_argument(
+        "--no-delay",
+        action="store_true",
+        help="Skip the one-second delay between quote batches (test use only).",
+    )
     args = parser.parse_args()
 
     settings = Settings.load(SETTINGS_PATH)
@@ -50,6 +63,14 @@ def main() -> None:
                 }
             )
         )
+    elif args.command == "monitor-cycle":
+        result = run_monitor_cycle(
+            settings,
+            ROOT,
+            force=args.force,
+            no_delay=args.no_delay,
+        )
+        print(json.dumps(asdict(result), indent=2))
 
 
 if __name__ == "__main__":
