@@ -5,7 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ai_investor.config import Settings
-from ai_investor.monitor import is_regular_market_window, quote_batches
+from ai_investor.monitor import (
+    is_regular_market_window,
+    quote_batches,
+    quotes_are_fresh,
+)
 from ai_investor.robinhood_mcp import (
     KNOWN_MUTATING_TOOLS,
     MONITOR_READ_ONLY_TOOLS,
@@ -41,6 +45,19 @@ class SafetyTests(unittest.TestCase):
                 "America/New_York",
             )
         )
+
+    def test_quote_freshness_guard(self) -> None:
+        now = datetime(2026, 9, 10, 15, 0, tzinfo=timezone.utc)
+        self.assertTrue(
+            quotes_are_fresh(
+                [{"last_trade_time": "2026-09-10T14:45:00Z"}], now, 30
+            )
+        )
+        self.assertFalse(
+            quotes_are_fresh(
+                [{"last_trade_time": "2026-09-09T20:00:00Z"}], now, 30
+            )
+        )
         self.assertFalse(
             is_regular_market_window(
                 datetime(2026, 9, 12, 14, 0, tzinfo=timezone.utc),
@@ -60,6 +77,7 @@ class SafetyTests(unittest.TestCase):
                 "[monitor]\n"
                 "interval_minutes=15\nuniverse_size=60\nquote_batch_size=20\n"
                 "max_mcp_calls_per_cycle=8\nquote_batch_delay_seconds=1.0\n"
+                "max_quote_age_minutes=30\n"
                 'market_timezone="America/New_York"\n'
                 "core_target=33\nevent_target=10\nposition_reserve=5\n"
                 "core_min_price=10.0\ncore_min_market_cap=5000000000\n"

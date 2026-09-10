@@ -13,6 +13,7 @@ universe_size = 60
 quote_batch_size = 20
 max_mcp_calls_per_cycle = 8
 quote_batch_delay_seconds = 1.0
+max_quote_age_minutes = 30
 market_timezone = "America/New_York"
 core_target = 33
 event_target = 10

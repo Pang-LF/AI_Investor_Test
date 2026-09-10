@@ -123,6 +123,29 @@ def _quote_record(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def quotes_are_fresh(
+    records: Sequence[Dict[str, Any]],
+    now: datetime,
+    max_age_minutes: int,
+) -> bool:
+    timestamps = []
+    for record in records:
+        raw = record.get("last_trade_time")
+        if not raw:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        timestamps.append(parsed.astimezone(timezone.utc))
+    if not timestamps:
+        return False
+    age_seconds = (now.astimezone(timezone.utc) - max(timestamps)).total_seconds()
+    return -300 <= age_seconds <= max_age_minutes * 60
+
+
 def _float(value: Any) -> float:
     try:
         return float(value)
@@ -214,6 +237,44 @@ def run_monitor_cycle(
         for index, batch in enumerate(batches):
             payload = client.call_tool("get_equity_quotes", {"symbols": batch})
             records.extend(_quote_record(item) for item in _quote_rows(payload))
+            if (
+                index == 0
+                and not force
+                and not quotes_are_fresh(
+                    records,
+                    current,
+                    settings.monitor.max_quote_age_minutes,
+                )
+            ):
+                returned = {
+                    str(record.get("symbol") or "") for record in records
+                }
+                missing = tuple(sorted(set(symbols) - returned))
+                log_path = root / "logs" / "market" / f"{trading_date}.jsonl"
+                _append_log(
+                    log_path,
+                    {
+                        "timestamp": timestamp,
+                        "mode": settings.mode,
+                        "account": account.masked_account,
+                        "status": "skipped_stale_market_data",
+                        "quotes": records,
+                        "missing_symbols": list(missing),
+                        "triggers": [],
+                        "mcp_tool_calls": client.call_count,
+                        "llm_calls": 0,
+                    },
+                )
+                return MonitorResult(
+                    status="skipped_stale_market_data",
+                    timestamp=timestamp,
+                    universe_size=len(entries),
+                    quote_count=len(records),
+                    missing_symbols=missing,
+                    mcp_tool_calls=client.call_count,
+                    log_path=str(log_path),
+                    llm_calls=0,
+                )
             if (
                 not no_delay
                 and index < len(batches) - 1

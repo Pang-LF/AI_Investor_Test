@@ -16,6 +16,8 @@ Current phase: **DRY_RUN read-only monitoring**. There is no order execution cod
   calls do not create or modify Robinhood scans or watchlists.
 - A morning/afternoon universe cache, deterministic price-move triggers, local
   JSONL logs, retry/backoff, and a hard eight-tool-call cycle budget.
+- A quote-freshness guard stops after the first batch on market holidays or
+  after an early close when the latest regular-hours print is over 30 minutes old.
 - A hard configuration lock that rejects `LIVE_TRADING=true`.
 - Token and estimated GPT-5.6 Luna cost reporting for the read-only snapshot.
 

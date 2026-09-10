@@ -18,6 +18,7 @@ class MonitorSettings:
     quote_batch_size: int
     max_mcp_calls_per_cycle: int
     quote_batch_delay_seconds: float
+    max_quote_age_minutes: int
     market_timezone: str
     core_target: int
     event_target: int
@@ -42,6 +43,7 @@ class MonitorSettings:
             quote_batch_size=int(raw["quote_batch_size"]),
             max_mcp_calls_per_cycle=int(raw["max_mcp_calls_per_cycle"]),
             quote_batch_delay_seconds=float(raw["quote_batch_delay_seconds"]),
+            max_quote_age_minutes=int(raw["max_quote_age_minutes"]),
             market_timezone=str(raw["market_timezone"]),
             core_target=int(raw["core_target"]),
             event_target=int(raw["event_target"]),
@@ -77,6 +79,8 @@ class MonitorSettings:
             raise RuntimeError("The 60-symbol monitor must use exactly three batches")
         if self.max_mcp_calls_per_cycle < 7:
             raise RuntimeError("MCP call budget is too small for a full refresh cycle")
+        if self.max_quote_age_minutes < self.interval_minutes:
+            raise RuntimeError("Quote freshness window must cover at least one interval")
         if len(set(self.fixed_etfs)) != len(self.fixed_etfs):
             raise RuntimeError("fixed_etfs contains duplicates")
         if len(self.fixed_etfs) != 12:
