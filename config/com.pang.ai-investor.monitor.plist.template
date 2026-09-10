@@ -7,7 +7,7 @@
   <key>ProgramArguments</key>
   <array>
     <string>__AI_INVESTOR_EXECUTABLE__</string>
-    <string>monitor-cycle</string>
+    <string>agent-cycle</string>
   </array>
   <key>WorkingDirectory</key>
   <string>__AI_INVESTOR_ROOT__</string>

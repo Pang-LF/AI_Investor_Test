@@ -191,9 +191,9 @@ def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
     change = _number(columns.get("% Change"))
     relative_volume = _number(columns.get("Relative volume"))
     completeness_fields = (
-        last,
-        average_volume,
-        market_cap,
+        columns.get("Last"),
+        columns.get("Average volume"),
+        columns.get("Market cap"),
         columns.get("Sector"),
         columns.get("% Change"),
     )
@@ -206,7 +206,10 @@ def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
         "market_cap": market_cap,
         "change": change,
         "relative_volume": relative_volume,
-        "completeness": sum(bool(value) for value in completeness_fields)
+        "completeness": sum(
+            value is not None and str(value).strip() != ""
+            for value in completeness_fields
+        )
         / len(completeness_fields),
     }
 
@@ -233,12 +236,13 @@ def _rank_core(
     for metric in metrics:
         liquidity = _percentile(liquidities, math.log1p(metric["dollar_volume"]))
         size = _percentile(sizes, math.log1p(metric["market_cap"]))
-        opportunity = min(abs(metric["change"]) / 0.05, 1.0)
+        # Core membership is an observation decision, not an alpha signal.
+        # Recent returns belong in the event/signal layer and must not affect
+        # whether a stable, liquid company stays in the core pool.
         score = (
             0.50 * liquidity
-            + 0.25 * size
-            + 0.15 * opportunity
-            + 0.10 * metric["completeness"]
+            + 0.30 * size
+            + 0.20 * metric["completeness"]
         )
         ranked.append(
             UniverseEntry(

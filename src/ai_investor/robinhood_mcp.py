@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import Any, Dict, FrozenSet, Optional
+from typing import Any, Dict, FrozenSet, Iterable, Optional
 
 import httpx
 
@@ -20,6 +20,27 @@ MONITOR_READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
         "get_equity_quotes",
         "preview_scan",
     }
+)
+
+DECISION_READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
+    {
+        "get_accounts",
+        "get_portfolio",
+        "get_equity_positions",
+        "get_equity_orders",
+        "get_equity_quotes",
+        "get_equity_historicals",
+        "get_equity_tradability",
+        "get_equity_fundamentals",
+        "get_financials",
+        "get_earnings_results",
+        "get_equity_news",
+    }
+)
+
+ORDER_REVIEW_TOOLS: FrozenSet[str] = frozenset({"review_equity_order"})
+ORDER_WRITE_TOOLS: FrozenSet[str] = frozenset(
+    {"place_equity_order", "cancel_equity_order"}
 )
 
 KNOWN_MUTATING_TOOLS: FrozenSet[str] = frozenset(
@@ -102,16 +123,20 @@ def _structured_tool_result(result: Dict[str, Any]) -> Dict[str, Any]:
     raise MCPError("Robinhood tool response had no structured JSON content")
 
 
-class RobinhoodReadOnlyMCPClient:
-    """Small Streamable HTTP MCP client with a hard read-only tool allowlist."""
+class RobinhoodMCPClient:
+    """Small Streamable HTTP MCP client with an explicit per-use allowlist."""
 
     def __init__(
         self,
         max_calls: int,
+        allowed_tools: Iterable[str],
+        allow_order_submission: bool = False,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
     ) -> None:
         self.max_calls = max_calls
+        self.allowed_tools = frozenset(allowed_tools)
+        self.allow_order_submission = allow_order_submission
         self.max_retries = max_retries
         self.call_count = 0
         self._request_id = 0
@@ -123,7 +148,7 @@ class RobinhoodReadOnlyMCPClient:
             "Content-Type": "application/json",
         }
 
-    def __enter__(self) -> "RobinhoodReadOnlyMCPClient":
+    def __enter__(self) -> "RobinhoodMCPClient":
         self._initialize()
         return self
 
@@ -143,7 +168,15 @@ class RobinhoodReadOnlyMCPClient:
 
     def _post(self, payload: Dict[str, Any]) -> httpx.Response:
         for attempt in range(self.max_retries + 1):
-            response = self._http.post(MCP_URL, headers=self._headers(), json=payload)
+            try:
+                response = self._http.post(
+                    MCP_URL, headers=self._headers(), json=payload
+                )
+            except httpx.RequestError:
+                if attempt == self.max_retries:
+                    raise
+                time.sleep(min(float(2**attempt), 8.0))
+                continue
             if response.status_code not in {429, 500, 502, 503, 504}:
                 response.raise_for_status()
                 return response
@@ -180,10 +213,14 @@ class RobinhoodReadOnlyMCPClient:
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        if name not in MONITOR_READ_ONLY_TOOLS:
-            raise MCPError(f"Phase 1 rejected non-allowlisted MCP tool: {name}")
-        if name in KNOWN_MUTATING_TOOLS:
-            raise MCPError(f"Safety invariant violated for MCP tool: {name}")
+        if name not in self.allowed_tools:
+            raise MCPError(f"Rejected non-allowlisted MCP tool: {name}")
+        if name in ORDER_WRITE_TOOLS and not self.allow_order_submission:
+            raise MCPError(f"Order submission is not armed for MCP tool: {name}")
+        if name in KNOWN_MUTATING_TOOLS and name not in (
+            ORDER_REVIEW_TOOLS | ORDER_WRITE_TOOLS
+        ):
+            raise MCPError(f"Unsupported mutating MCP tool: {name}")
         if self.call_count >= self.max_calls:
             raise MCPError("Per-cycle MCP call budget exhausted")
         self.call_count += 1
@@ -199,3 +236,21 @@ class RobinhoodReadOnlyMCPClient:
         if "error" in payload:
             raise MCPError(f"Robinhood MCP error: {payload['error']}")
         return _structured_tool_result(dict(payload.get("result", {})))
+
+
+class RobinhoodReadOnlyMCPClient(RobinhoodMCPClient):
+    """Compatibility wrapper used by the 60-symbol monitor."""
+
+    def __init__(
+        self,
+        max_calls: int,
+        timeout_seconds: float = 30.0,
+        max_retries: int = 2,
+    ) -> None:
+        super().__init__(
+            max_calls=max_calls,
+            allowed_tools=MONITOR_READ_ONLY_TOOLS,
+            allow_order_submission=False,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+        )

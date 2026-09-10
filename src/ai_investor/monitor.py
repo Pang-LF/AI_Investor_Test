@@ -130,22 +130,25 @@ def quotes_are_fresh(
     now: datetime,
     max_age_minutes: int,
 ) -> bool:
+    if not records:
+        return False
     timestamps = []
     for record in records:
         raw = record.get("last_trade_time")
         if not raw:
-            continue
+            return False
         try:
             parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
         except ValueError:
-            continue
+            return False
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
         timestamps.append(parsed.astimezone(timezone.utc))
-    if not timestamps:
-        return False
-    age_seconds = (now.astimezone(timezone.utc) - max(timestamps)).total_seconds()
-    return -300 <= age_seconds <= max_age_minutes * 60
+    current = now.astimezone(timezone.utc)
+    return all(
+        -300 <= (current - timestamp).total_seconds() <= max_age_minutes * 60
+        for timestamp in timestamps
+    )
 
 
 def _float(value: Any) -> float:
@@ -300,6 +303,35 @@ def run_monitor_cycle(
 
         returned = {str(record.get("symbol") or "") for record in records}
         missing = tuple(sorted(set(symbols) - returned))
+        if missing or not quotes_are_fresh(
+            records, current, settings.monitor.max_quote_age_minutes
+        ):
+            status = "skipped_incomplete_market_data" if missing else "skipped_stale_market_data"
+            log_path = root / "logs" / "market" / f"{trading_date}.jsonl"
+            _append_log(
+                log_path,
+                {
+                    "timestamp": timestamp,
+                    "mode": settings.mode,
+                    "account": account.masked_account,
+                    "status": status,
+                    "quotes": records,
+                    "missing_symbols": list(missing),
+                    "triggers": [],
+                    "mcp_tool_calls": client.call_count,
+                    "llm_calls": 0,
+                },
+            )
+            return MonitorResult(
+                status=status,
+                timestamp=timestamp,
+                universe_size=len(entries),
+                quote_count=len(records),
+                missing_symbols=missing,
+                mcp_tool_calls=client.call_count,
+                log_path=str(log_path),
+                llm_calls=0,
+            )
         trigger_rows = _triggers(records, entries, settings)
         log_path = root / "logs" / "market" / f"{trading_date}.jsonl"
         _append_log(
