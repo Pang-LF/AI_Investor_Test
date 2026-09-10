@@ -1,0 +1,24 @@
+# Secrets: never commit these to the public repository.
+*token*
+*secret*
+.env
+.env.*
+!.env.example
+
+# Local credentials and runtime data.
+.local/
+logs/
+*.db
+*.sqlite*
+
+# Python.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# macOS.
+.DS_Store
