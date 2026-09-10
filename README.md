@@ -2,6 +2,9 @@
 
 Current phase: **DRY_RUN read-only monitoring**. There is no order execution code in this repository.
 
+The current architecture review and open-source model comparison is in
+[`docs/research/autonomous_system_gap_analysis.md`](docs/research/autonomous_system_gap_analysis.md).
+
 ## What is implemented
 
 - Robinhood OAuth with PKCE, dynamic client registration, refresh tokens, and macOS Keychain storage.
