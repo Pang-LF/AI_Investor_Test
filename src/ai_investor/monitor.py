@@ -12,10 +12,12 @@ from .config import Settings
 from .robinhood_mcp import RobinhoodReadOnlyMCPClient
 from .universe import (
     UniverseEntry,
-    build_universe,
+    assemble_universe,
     entries_from_json,
     entries_to_json,
     resolve_agentic_account,
+    scan_core_candidates,
+    scan_event_candidates,
 )
 
 
@@ -56,12 +58,7 @@ class UniverseCache:
     def __init__(self, path: Path) -> None:
         self.path = path
 
-    def load(
-        self,
-        trading_date: str,
-        refresh_bucket: str,
-        position_symbols: Sequence[str],
-    ) -> Optional[List[UniverseEntry]]:
+    def load(self, trading_date: str) -> Optional[Dict[str, Any]]:
         if not self.path.exists():
             return None
         try:
@@ -70,28 +67,33 @@ class UniverseCache:
             return None
         if raw.get("trading_date") != trading_date:
             return None
-        if raw.get("refresh_bucket") != refresh_bucket:
+        if raw.get("cache_version") != 2:
             return None
-        cached_positions = sorted(
-            entry["symbol"]
-            for entry in raw.get("entries", [])
-            if entry.get("bucket") == "position"
-        )
-        if cached_positions != sorted(position_symbols):
+        core_candidates = entries_from_json(raw.get("core_candidates", []))
+        event_candidates = entries_from_json(raw.get("event_candidates", []))
+        if not core_candidates or not event_candidates:
             return None
-        entries = entries_from_json(raw.get("entries", []))
-        return entries or None
+        return {
+            "event_bucket": str(raw.get("event_bucket", "")),
+            "core_candidates": core_candidates,
+            "event_candidates": event_candidates,
+        }
 
     def save(
         self,
         trading_date: str,
-        refresh_bucket: str,
+        event_bucket: str,
+        core_candidates: Sequence[UniverseEntry],
+        event_candidates: Sequence[UniverseEntry],
         entries: Sequence[UniverseEntry],
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
+            "cache_version": 2,
             "trading_date": trading_date,
-            "refresh_bucket": refresh_bucket,
+            "event_bucket": event_bucket,
+            "core_candidates": entries_to_json(core_candidates),
+            "event_candidates": entries_to_json(event_candidates),
             "entries": entries_to_json(entries),
         }
         temporary = self.path.with_suffix(".tmp")
@@ -219,14 +221,28 @@ def run_monitor_cycle(
         account = resolve_agentic_account(
             client, max_positions=settings.monitor.position_reserve
         )
-        entries = cache.load(
-            trading_date, refresh_bucket, account.position_symbols
+        cached = cache.load(trading_date)
+        if cached is None:
+            core_candidates = scan_core_candidates(client, settings.monitor)
+            event_candidates = scan_event_candidates(client, settings.monitor)
+        else:
+            core_candidates = cached["core_candidates"]
+            event_candidates = cached["event_candidates"]
+            if cached["event_bucket"] != refresh_bucket:
+                event_candidates = scan_event_candidates(client, settings.monitor)
+        entries = assemble_universe(
+            settings.monitor,
+            account.position_symbols,
+            core_candidates,
+            event_candidates,
         )
-        if entries is None:
-            entries = build_universe(
-                client, settings.monitor, account.position_symbols
-            )
-            cache.save(trading_date, refresh_bucket, entries)
+        cache.save(
+            trading_date,
+            refresh_bucket,
+            core_candidates,
+            event_candidates,
+            entries,
+        )
 
         symbols = [entry.symbol for entry in entries]
         batches = quote_batches(symbols, settings.monitor.quote_batch_size)

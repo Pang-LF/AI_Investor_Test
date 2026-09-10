@@ -14,8 +14,9 @@ Current phase: **DRY_RUN read-only monitoring**. There is no order execution cod
   U.S. market hours.
 - Read-only full-market scan previews for the core and event buckets. Preview
   calls do not create or modify Robinhood scans or watchlists.
-- A morning/afternoon universe cache, deterministic price-move triggers, local
-  JSONL logs, retry/backoff, and a hard eight-tool-call cycle budget.
+- A daily core-ranking cache plus morning/afternoon event refresh,
+  deterministic price-move triggers, local JSONL logs, retry/backoff, and a
+  hard eight-tool-call cycle budget.
 - A quote-freshness guard stops after the first batch on market holidays or
   after an early close when the latest regular-hours print is over 30 minutes old.
 - A hard configuration lock that rejects `LIVE_TRADING=true`.

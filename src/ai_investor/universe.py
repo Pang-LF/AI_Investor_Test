@@ -295,10 +295,27 @@ def _take_with_sector_cap(
     return selected
 
 
-def build_universe(
+def scan_core_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
+) -> List[UniverseEntry]:
+    return _rank_core(
+        _core_rows(client, settings), settings.core_min_average_dollar_volume
+    )
+
+
+def scan_event_candidates(
+    client: RobinhoodReadOnlyMCPClient,
+    settings: MonitorSettings,
+) -> List[UniverseEntry]:
+    return _rank_events(_event_rows(client, settings))
+
+
+def assemble_universe(
+    settings: MonitorSettings,
     position_symbols: Sequence[str],
+    core_candidates: Sequence[UniverseEntry],
+    event_candidates: Sequence[UniverseEntry],
 ) -> List[UniverseEntry]:
     positions = [
         UniverseEntry(symbol=symbol, bucket="position")
@@ -314,9 +331,6 @@ def build_universe(
             fixed.append(UniverseEntry(symbol=symbol, bucket="fixed_etf"))
             excluded.add(symbol)
 
-    core_candidates = _rank_core(
-        _core_rows(client, settings), settings.core_min_average_dollar_volume
-    )
     core = _take_with_sector_cap(
         core_candidates,
         settings.core_target,
@@ -324,7 +338,7 @@ def build_universe(
         sector_cap=5,
     )
     events = _take_with_sector_cap(
-        _rank_events(_event_rows(client, settings)),
+        event_candidates,
         settings.event_target,
         excluded,
         sector_cap=3,
@@ -346,6 +360,19 @@ def build_universe(
             f"{settings.universe_size}"
         )
     return entries
+
+
+def build_universe(
+    client: RobinhoodReadOnlyMCPClient,
+    settings: MonitorSettings,
+    position_symbols: Sequence[str],
+) -> List[UniverseEntry]:
+    return assemble_universe(
+        settings,
+        position_symbols,
+        scan_core_candidates(client, settings),
+        scan_event_candidates(client, settings),
+    )
 
 
 def entries_to_json(entries: Sequence[UniverseEntry]) -> List[Dict[str, Any]]:
