@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import asdict, dataclass
-from datetime import date, datetime, timedelta, timezone
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
 
@@ -59,28 +59,34 @@ def account_fingerprint(account_number: str) -> str:
     return hashlib.sha256(account_number.encode("utf-8")).hexdigest()
 
 
+def risk_policy_fingerprint(policy: object) -> str:
+    if is_dataclass(policy):
+        payload = asdict(policy)
+    elif hasattr(policy, "__dict__"):
+        payload = vars(policy)
+    else:
+        raise TypeError("Risk policy must be a dataclass or attribute object")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def arm_live(
     root: Path,
     account_number: str,
-    trading_date: str,
-    strategy_version: str,
-    risk_policy_version: str,
+    settings: Settings,
 ) -> Path:
-    requested = date.fromisoformat(trading_date)
-    today = date.today()
-    if requested not in {today, today + timedelta(days=1)}:
-        raise RuntimeError("Live arming is valid only for today or tomorrow")
     path = root / ".local" / "state" / "live_arm.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(
             {
-                "schema_version": 2,
-                "trading_date": trading_date,
+                "schema_version": 3,
+                "authorization_mode": "persistent",
                 "account_fingerprint": account_fingerprint(account_number),
-                "strategy_version": strategy_version,
-                "risk_policy_version": risk_policy_version,
+                "strategy_version_at_arm": settings.strategy_version,
+                "risk_policy_version": settings.risk.policy_version,
+                "risk_policy_fingerprint": risk_policy_fingerprint(settings.risk),
                 "armed_at": datetime.now(timezone.utc).isoformat(),
             },
             separators=(",", ":"),
@@ -91,22 +97,52 @@ def arm_live(
     return path
 
 
-def assert_live_armed(settings: Settings, root: Path, account_number: str, trading_date: str) -> None:
-    if settings.mode != "LIVE" or not settings.live_trading:
-        raise RuntimeError("LIVE_TRADING kill switch is off")
+def _load_live_arm(root: Path) -> Dict[str, Any]:
     path = root / ".local" / "state" / "live_arm.json"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Daily live arm file is absent or invalid") from exc
-    if payload.get("trading_date") != trading_date:
-        raise RuntimeError("Daily live arm has expired")
-    if payload.get("account_fingerprint") != account_fingerprint(account_number):
-        raise RuntimeError("Live arm does not match the selected account")
-    if payload.get("strategy_version") != settings.strategy_version:
-        raise RuntimeError("Live arm does not match the active strategy version")
+        raise RuntimeError("Persistent live authorization is absent or invalid") from exc
+    if payload.get("schema_version") != 3:
+        raise RuntimeError(
+            "Persistent live authorization must be recreated for the current schema"
+        )
+    if payload.get("authorization_mode") != "persistent":
+        raise RuntimeError("Live authorization is not persistent")
+    return payload
+
+
+def assert_live_armed_fingerprint(
+    settings: Settings,
+    root: Path,
+    observed_account_fingerprint: str,
+) -> None:
+    if settings.mode != "LIVE" or not settings.live_trading:
+        raise RuntimeError("LIVE_TRADING kill switch is off")
+    payload = _load_live_arm(root)
+    if payload.get("account_fingerprint") != observed_account_fingerprint:
+        raise RuntimeError(
+            "Persistent live authorization does not match the selected account"
+        )
     if payload.get("risk_policy_version") != settings.risk.policy_version:
-        raise RuntimeError("Live arm does not match the active risk policy version")
+        raise RuntimeError(
+            "Persistent live authorization does not match the active risk policy version"
+        )
+    if payload.get("risk_policy_fingerprint") != risk_policy_fingerprint(settings.risk):
+        raise RuntimeError(
+            "Persistent live authorization does not match the active hard-risk settings"
+        )
+
+
+def assert_live_armed(
+    settings: Settings,
+    root: Path,
+    account_number: str,
+    _trading_date: Optional[str] = None,
+) -> None:
+    assert_live_armed_fingerprint(
+        settings, root, account_fingerprint(account_number)
+    )
 
 
 def deterministic_ref_id(decision_key: str, symbol: str, side: str, value: float) -> str:

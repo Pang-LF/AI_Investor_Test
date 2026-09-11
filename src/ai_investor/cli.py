@@ -14,7 +14,18 @@ from .credential_store import (
     set_smtp_config,
 )
 from .agent import run_agent_cycle
-from .execution import arm_live, execution_toolset, fetch_broker_state
+from .execution import (
+    arm_live,
+    assert_live_armed,
+    execution_toolset,
+    fetch_broker_state,
+)
+from .health import (
+    classify_operational_failure,
+    clear_operational_failures,
+    report_operational_failure,
+    sanitize_error,
+)
 from .monitor import run_monitor_cycle
 from .notification import send_or_queue
 from .robinhood_mcp import RobinhoodMCPClient
@@ -57,16 +68,35 @@ def main() -> None:
     agent_parser.add_argument("--force-monitor", action="store_true")
     agent_parser.add_argument("--no-delay", action="store_true")
     arm_parser = subparsers.add_parser("arm-live")
-    arm_parser.add_argument("--date", required=True, help="Trading date, YYYY-MM-DD")
+    arm_parser.add_argument(
+        "--persistent",
+        action="store_true",
+        required=True,
+        help="Authorize LIVE until disarmed or account/hard-risk settings change.",
+    )
     arm_parser.add_argument(
         "--ack",
         required=True,
         help='Must equal "I ACCEPT LIVE TRADING RISK".',
     )
+    subparsers.add_parser("live-status")
     subparsers.add_parser("disarm-live")
     args = parser.parse_args()
 
-    settings = Settings.load(SETTINGS_PATH)
+    try:
+        settings = Settings.load(SETTINGS_PATH)
+    except Exception as exc:
+        if args.command == "agent-cycle":
+            try:
+                report_operational_failure(
+                    ROOT,
+                    component="configuration",
+                    error=f"{type(exc).__name__}: {exc}",
+                    repeat_minutes=360,
+                )
+            except Exception:
+                pass
+        raise
     oauth = RobinhoodOAuth()
 
     if args.command == "check-config":
@@ -138,9 +168,40 @@ def main() -> None:
         )
         print(json.dumps(asdict(result), indent=2))
     elif args.command == "agent-cycle":
-        result = run_agent_cycle(
-            settings, ROOT, force_monitor=args.force_monitor, no_delay=args.no_delay
-        )
+        try:
+            result = run_agent_cycle(
+                settings,
+                ROOT,
+                force_monitor=args.force_monitor,
+                no_delay=args.no_delay,
+            )
+        except Exception as exc:
+            component = classify_operational_failure(exc)
+            safe_error = sanitize_error(f"{type(exc).__name__}: {exc}")
+            alert_status = "failed"
+            try:
+                delivery = report_operational_failure(
+                    ROOT,
+                    component=component,
+                    error=safe_error,
+                    repeat_minutes=settings.health.persistent_failure_repeat_minutes,
+                )
+                alert_status = delivery.status
+            except Exception as alert_exc:
+                alert_status = f"alert_failed: {type(alert_exc).__name__}"
+            print(
+                json.dumps(
+                    {
+                        "status": "operational_failure",
+                        "component": component,
+                        "error": safe_error,
+                        "alert": alert_status,
+                    },
+                    indent=2,
+                )
+            )
+            raise SystemExit(1) from exc
+        clear_operational_failures(ROOT, ("agent_runtime", "configuration"))
         print(json.dumps(asdict(result), indent=2))
     elif args.command == "arm-live":
         if args.ack != "I ACCEPT LIVE TRADING RISK":
@@ -154,15 +215,37 @@ def main() -> None:
         path = arm_live(
             ROOT,
             state.account_number,
-            args.date,
-            settings.strategy_version,
-            settings.risk.policy_version,
+            settings,
         )
-        print(f"Daily live arm created at {path}; config kill switch is unchanged.")
+        print(
+            f"Persistent LIVE authorization created at {path}; it remains bound "
+            "to this Agentic account and the complete hard-risk configuration."
+        )
+    elif args.command == "live-status":
+        try:
+            with RobinhoodMCPClient(
+                max_calls=3,
+                allowed_tools=execution_toolset(False),
+                allow_order_submission=False,
+            ) as client:
+                state = fetch_broker_state(client)
+            assert_live_armed(settings, ROOT, state.account_number)
+            payload = {
+                "authorized": True,
+                "authorization_mode": "persistent",
+                "account": "••••" + state.account_number[-4:],
+                "risk_policy_version": settings.risk.policy_version,
+            }
+        except Exception as exc:
+            payload = {
+                "authorized": False,
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        print(json.dumps(payload, indent=2))
     elif args.command == "disarm-live":
         path = ROOT / ".local" / "state" / "live_arm.json"
         path.unlink(missing_ok=True)
-        print("LIVE disarmed. Config kill switch should also remain false.")
+        print("Persistent LIVE authorization removed; order placement is blocked.")
 
 
 if __name__ == "__main__":

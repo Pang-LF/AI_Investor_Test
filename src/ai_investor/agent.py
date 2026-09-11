@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .execution import (
     assert_live_armed,
+    assert_live_armed_fingerprint,
     execute_orders,
     execution_toolset,
     fetch_broker_state,
@@ -19,6 +20,7 @@ from .execution import (
     reconcile_orders,
 )
 from .forecasting import candidate_forecasts, forecast_assets, infer_market_regime
+from .health import clear_operational_failures, report_operational_failure
 from .ledger import Ledger
 from .market_data import HistoricalCache, get_daily_histories
 from .monitor import run_monitor_cycle
@@ -110,8 +112,31 @@ def run_agent_cycle(
     timings: Dict[str, float] = {
         "monitor_seconds": round(time.monotonic() - cycle_started, 3)
     }
+    if settings.mode == "LIVE" and monitor.account_fingerprint:
+        # Validate persistent authorization on every in-hours observation cycle,
+        # not only after an expensive LLM decision has already been made.
+        assert_live_armed_fingerprint(
+            settings, root, monitor.account_fingerprint
+        )
+        clear_operational_failures(root, ("live_authorization",))
     if monitor.status != "completed_read_only":
+        if monitor.status in {
+            "skipped_stale_market_data",
+            "skipped_incomplete_market_data",
+        }:
+            report_operational_failure(
+                root,
+                component="market_data",
+                error=f"Monitor cycle stopped: {monitor.status}",
+                repeat_minutes=settings.health.persistent_failure_repeat_minutes,
+                occurrence_threshold=settings.health.degraded_cycles_before_alert,
+                now=current,
+            )
         return AgentResult(status="monitor_only", monitor_status=monitor.status)
+    clear_operational_failures(
+        root,
+        ("market_data", "robinhood_service", "robinhood_authentication"),
+    )
     monitor_payload = _latest_monitor_payload(monitor.log_path)
     reason = _decision_reason(current, settings, bool(monitor.triggers))
     if reason is None:

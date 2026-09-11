@@ -1,50 +1,63 @@
 # Live runbook
 
-The repository is currently configured as LIVE-capable and LIVE-enabled, but a
-daily version-bound arm is still mandatory. Do not bypass the sequence below.
-Robinhood states that the account owner is responsible for agent orders.
+The repository is configured as LIVE-capable and LIVE-enabled. Robinhood states
+that the account owner remains responsible for agent orders.
 
-## Every trading day
+## One-time persistent authorization
 
-1. Keep the Mac awake, connected to power, and online.
-2. Confirm `margin investing` is disabled in Robinhood. The program nevertheless
+1. Keep the Mac awake, connected to power, logged in, and online during market
+   hours. Confirm `margin investing` is disabled in Robinhood. The program still
    sizes buys from `cash`, never `buying_power`.
-3. Run the test suite:
+2. Run the test suite and inspect authorization status:
 
    ```bash
    .venv/bin/python -m unittest discover -s tests -v
+   .venv/bin/ai-investor live-status
    ```
 
-4. Run and inspect one market-hours shadow decision:
-
-   ```bash
-   .venv/bin/ai-investor agent-cycle
-   tail -n 1 logs/decisions/$(TZ=America/New_York date +%F).jsonl
-   ```
-
-5. Only after the shadow output, account mapping, proposed orders, and risk
-   reasons are correct, set both values in `config/settings.toml`:
+3. Confirm both config gates in `config/settings.toml`:
 
    ```toml
    mode = "LIVE"
    live_trading = true
    ```
 
-6. Arm only the current or next calendar date. The arm stores a one-way account
-   hash—not the account number—and the active strategy/risk-policy versions:
+4. Create the persistent authorization with the exact acknowledgement:
 
    ```bash
-   .venv/bin/ai-investor arm-live --date YYYY-MM-DD \
+   .venv/bin/ai-investor arm-live --persistent \
      --ack "I ACCEPT LIVE TRADING RISK"
    ```
 
-The scheduler still exits without an order unless there is a scheduled decision
-window or a deterministic market trigger, a quantitative candidate, an LLM
-`allow`, a valid optimizer target, and a passing order review plus hard-risk
-approval.
+5. Verify it without placing an order:
 
-Any strategy or hard-risk version change invalidates an existing arm and requires
-the explicit command again.
+   ```bash
+   .venv/bin/ai-investor live-status
+   ```
+
+No daily terminal command is required after this. The scheduler still exits
+without an order unless there is a scheduled decision window or deterministic
+market trigger, a quantitative candidate, an LLM `allow`, a valid optimizer
+target, and passing order review plus hard-risk approval.
+
+The authorization permits investment-strategy version changes but is invalidated
+by an Agentic-account change, a hard-risk policy-version change, a change to any
+hard-risk value, a missing/corrupt local authorization, or either LIVE config
+switch being disabled. The old date-bound authorization format is rejected.
+
+## Failure notification
+
+- Missing/invalid authorization, OAuth/MCP failures, configuration failures, and
+  unhandled background errors send an email when first detected.
+- Stale or incomplete market data sends an email after two consecutive failed
+  cycles, normally about 30 minutes.
+- An unresolved failure may send another reminder after six hours. Successful
+  checks reset alert counters silently.
+- Alerts are also written to `logs/health/YYYY-MM-DD.jsonl`. No recovery email or
+  daily heartbeat email is sent.
+- A local process cannot send email while the Mac is off, fully offline, the
+  LaunchAgent itself is not running, or SMTP is unavailable. Covering those cases
+  requires a separate external watchdog.
 
 ## Emergency stop
 
@@ -54,8 +67,8 @@ Run:
 .venv/bin/ai-investor disarm-live
 ```
 
-Then set `live_trading = false` and `mode = "SHADOW"`. Either the absent daily
-arm or the false config kill switch independently prevents order placement.
+Then set `live_trading = false` and `mode = "SHADOW"`. Either an absent persistent
+authorization or the false config kill switch independently prevents order placement.
 Open or already-routed orders are not automatically cancelled; inspect and
 cancel them in Robinhood if necessary.
 

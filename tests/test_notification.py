@@ -1,10 +1,12 @@
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from ai_investor.credential_store import SMTPConfig
 from ai_investor.forecasting import AssetForecast, MarketRegime
+from ai_investor.health import clear_operational_failures, report_operational_failure
 from ai_investor.notification import build_decision_email, send_or_queue
 from ai_investor.research import ResearchResult
 
@@ -49,6 +51,57 @@ class NotificationTests(unittest.TestCase):
                 )
             self.assertEqual(result.status, "queued")
             self.assertTrue((Path(directory) / ".local/notification_outbox/r.json").exists())
+
+    def test_operational_failure_alert_is_rate_limited(self) -> None:
+        config = SMTPConfig("smtp.example.com", 465, "u", "p", "a@b.com", "c@d.com")
+        start = datetime(2026, 9, 11, 14, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("ai_investor.notification.get_smtp_config", return_value=config):
+                with patch("ai_investor.notification._deliver") as deliver:
+                    first = report_operational_failure(
+                        root, component="live_authorization", error="missing",
+                        repeat_minutes=360, now=start,
+                    )
+                    second = report_operational_failure(
+                        root, component="live_authorization", error="missing",
+                        repeat_minutes=360, now=start + timedelta(minutes=15),
+                    )
+                    third = report_operational_failure(
+                        root, component="live_authorization", error="missing",
+                        repeat_minutes=360, now=start + timedelta(minutes=361),
+                    )
+            self.assertEqual(first.status, "sent")
+            self.assertEqual(second.status, "suppressed")
+            self.assertEqual(third.status, "sent")
+            self.assertEqual(deliver.call_count, 2)
+
+    def test_degraded_alert_waits_for_threshold_and_resets_silently(self) -> None:
+        config = SMTPConfig("smtp.example.com", 465, "u", "p", "a@b.com", "c@d.com")
+        start = datetime(2026, 9, 11, 14, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch("ai_investor.notification.get_smtp_config", return_value=config):
+                with patch("ai_investor.notification._deliver") as deliver:
+                    first = report_operational_failure(
+                        root, component="market_data", error="stale",
+                        repeat_minutes=360, occurrence_threshold=2, now=start,
+                    )
+                    second = report_operational_failure(
+                        root, component="market_data", error="stale",
+                        repeat_minutes=360, occurrence_threshold=2,
+                        now=start + timedelta(minutes=15),
+                    )
+                    clear_operational_failures(root, ("market_data",))
+                    after_reset = report_operational_failure(
+                        root, component="market_data", error="stale",
+                        repeat_minutes=360, occurrence_threshold=2,
+                        now=start + timedelta(minutes=30),
+                    )
+            self.assertEqual(first.status, "suppressed")
+            self.assertEqual(second.status, "sent")
+            self.assertEqual(after_reset.status, "suppressed")
+            self.assertEqual(deliver.call_count, 1)
 
 
 if __name__ == "__main__":

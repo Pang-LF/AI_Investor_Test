@@ -8,7 +8,8 @@ execution so that no single model response can directly become an order.
 
 The macOS LaunchAgent starts `ai-investor agent-cycle` every 900 seconds. The Mac
 must be awake and online; the scheduler does not make a sleeping laptop monitor
-the market. Each live trading date also requires an account-bound local arm.
+the market. LIVE requires one persistent local authorization rather than a new
+authorization every trading date.
 
 The top-level sequence is:
 
@@ -166,8 +167,17 @@ Actual placement additionally requires all of:
 
 - `mode = LIVE`;
 - `live_trading = true`;
-- a nonexpired daily arm bound to the selected Agentic account hash;
+- a persistent authorization bound to the selected Agentic account hash, the
+  hard-risk policy version, and a hash of every hard-risk parameter;
 - all preceding risk and Robinhood review checks.
+
+The persistent authorization does not expire at midnight and a strategy-version
+change does not invalidate it, allowing the agent to evolve investment rules.
+It fails closed if the authorization file is missing/invalid, the selected
+Agentic account changes, any hard-risk value changes, the hard-risk version
+changes, or either LIVE config switch is disabled. Legacy daily-arm files cannot
+authorize the new schema. Authorization is checked on every successful in-hours
+monitor connection and again immediately before each order placement.
 
 ## Email and logging
 
@@ -182,6 +192,18 @@ the execution quote stale. Delivery retries once; failures are stored in ignored
 `.local/notification_outbox` and retried on later cycles. When
 `notification_required = true`, missing SMTP configuration blocks the LLM and
 therefore blocks trading.
+
+Operational failures are separate from decision summaries. Unhandled scheduler,
+configuration, Robinhood OAuth/MCP, authorization, and runtime failures are
+logged under `logs/health` and trigger an email on first detection. A stale or
+incomplete market snapshot must occur in two consecutive cycles before alerting
+to avoid noise from one transient quote issue. An unresolved failure may remind
+again after six hours; successful checks reset its counter silently. Recovery
+and daily heartbeat emails are intentionally disabled.
+
+The failure notifier runs on this Mac. It cannot send while the Mac is off,
+fully offline, the LaunchAgent itself is not executing, or SMTP is unavailable.
+An external dead-man watchdog would be required to actively detect those cases.
 
 ## Latency expectations and remaining limitations
 

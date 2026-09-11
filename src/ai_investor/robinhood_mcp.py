@@ -198,7 +198,7 @@ class RobinhoodMCPClient:
                     "capabilities": {},
                     "clientInfo": {
                         "name": "ai-investor-test",
-                        "version": "0.5.0",
+                        "version": "0.6.0",
                     },
                 },
             }

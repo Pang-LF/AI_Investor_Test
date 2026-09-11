@@ -13,7 +13,8 @@ of permanent capital loss.
 Current deployment mode: **LIVE-capable and config-enabled**. It reads real
 market/account data, trains the forecast, runs bounded LLM research, optimizes
 the target portfolio, applies hard risk, and calls Robinhood's order-review tool.
-It still cannot place an order unless the local daily account-bound arm is valid.
+It still cannot place an order unless the local persistent account- and
+hard-risk-bound authorization is valid.
 
 ## Decision architecture
 
@@ -59,6 +60,7 @@ The full implemented data and decision flow is documented in
 .venv/bin/ai-investor email-status
 .venv/bin/ai-investor monitor-cycle
 .venv/bin/ai-investor agent-cycle
+.venv/bin/ai-investor live-status
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
@@ -71,6 +73,12 @@ scripts/install_launchd.sh
 
 The Mac must stay awake and online. See
 [`docs/live_runbook.md`](docs/live_runbook.md) before changing to LIVE.
+
+Persistent LIVE is authorized once with an exact risk acknowledgement. It does
+not expire daily and permits strategy evolution, but any Agentic-account change
+or change to any hard-risk parameter invalidates it. Fatal background failures
+send a rate-limited email; two consecutive stale/incomplete market cycles also
+trigger an alert. No recovery or daily heartbeat emails are sent.
 
 Email summaries are mandatory before an LLM decision can trade. Configure SMTP
 credentials interactively so the password goes only to macOS Keychain:

@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .execution import account_fingerprint
 from .robinhood_mcp import RobinhoodReadOnlyMCPClient
 from .universe import (
     UniverseEntry,
@@ -36,6 +37,7 @@ class MonitorResult:
     mcp_tool_calls: int = 0
     log_path: str = ""
     llm_calls: int = 0
+    account_fingerprint: str = ""
 
 
 def quote_batches(symbols: Sequence[str], batch_size: int) -> List[List[str]]:
@@ -400,6 +402,7 @@ def run_monitor_cycle(
                     mcp_tool_calls=client.call_count,
                     log_path=str(log_path),
                     llm_calls=0,
+                    account_fingerprint=account_fingerprint(account.account_number),
                 )
             if (
                 not no_delay
@@ -438,6 +441,7 @@ def run_monitor_cycle(
                 mcp_tool_calls=client.call_count,
                 log_path=str(log_path),
                 llm_calls=0,
+                account_fingerprint=account_fingerprint(account.account_number),
             )
         log_path = root / "logs" / "market" / f"{trading_date}.jsonl"
         trigger_rows = _triggers(records, entries, settings)
@@ -472,4 +476,5 @@ def run_monitor_cycle(
             mcp_tool_calls=client.call_count,
             log_path=str(log_path),
             llm_calls=0,
+            account_fingerprint=account_fingerprint(account.account_number),
         )

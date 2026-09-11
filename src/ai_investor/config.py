@@ -12,6 +12,28 @@ except ModuleNotFoundError:  # Python 3.9 and 3.10
 
 
 @dataclass(frozen=True)
+class HealthSettings:
+    persistent_failure_repeat_minutes: int
+    degraded_cycles_before_alert: int
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "HealthSettings":
+        settings = cls(
+            persistent_failure_repeat_minutes=int(
+                raw.get("persistent_failure_repeat_minutes", 360)
+            ),
+            degraded_cycles_before_alert=int(
+                raw.get("degraded_cycles_before_alert", 2)
+            ),
+        )
+        if not 15 <= settings.persistent_failure_repeat_minutes <= 1440:
+            raise RuntimeError("Failure reminder interval must be 15-1440 minutes")
+        if not 1 <= settings.degraded_cycles_before_alert <= 4:
+            raise RuntimeError("Degraded-cycle alert threshold must be 1-4")
+        return settings
+
+
+@dataclass(frozen=True)
 class MonitorSettings:
     interval_minutes: int
     universe_size: int
@@ -356,6 +378,7 @@ class Settings:
     max_estimated_cost_per_run_usd: float
     max_monthly_llm_budget_usd: float
     notification_required: bool
+    health: HealthSettings
     monitor: MonitorSettings
     forecast: ForecastSettings
     research: ResearchSettings
@@ -408,6 +431,7 @@ class Settings:
             ),
             max_monthly_llm_budget_usd=float(raw["max_monthly_llm_budget_usd"]),
             notification_required=bool(raw["notification_required"]),
+            health=HealthSettings.from_dict(raw.get("health", {})),
             monitor=MonitorSettings.from_dict(raw["monitor"]),
             forecast=ForecastSettings.from_dict(raw["forecast"]),
             research=ResearchSettings.from_dict(raw["research"]),

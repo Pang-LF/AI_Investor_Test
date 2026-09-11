@@ -141,31 +141,65 @@ class ExecutionSafetyTests(unittest.TestCase):
         self.assertIn("leveraged_or_inverse_etf", decision.reasons)
         self.assertIn("prohibited_account_exposure", decision.reasons)
 
-    def test_live_needs_both_config_and_daily_arm(self) -> None:
+    def test_live_needs_both_config_and_persistent_authorization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, "kill switch"):
                 assert_live_armed(FakeSettings(), Path(directory), "x", "2026-01-01")
 
-    def test_live_arm_is_bound_to_strategy_and_risk_versions(self) -> None:
-        trading_date = datetime.now().date().isoformat()
+    def test_persistent_authorization_allows_strategy_change(self) -> None:
         settings = SimpleNamespace(
             mode="LIVE",
             live_trading=True,
             strategy_version="strategy_v1",
-            risk=SimpleNamespace(policy_version="risk_v1"),
+            risk=risk_settings(),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            arm_live(root, "account", trading_date, "strategy_v1", "risk_v1")
-            assert_live_armed(settings, root, "account", trading_date)
+            arm_live(root, "account", settings)
+            assert_live_armed(settings, root, "account")
             changed = SimpleNamespace(
                 mode="LIVE",
                 live_trading=True,
                 strategy_version="strategy_v2",
-                risk=SimpleNamespace(policy_version="risk_v1"),
+                risk=risk_settings(),
             )
-            with self.assertRaisesRegex(RuntimeError, "strategy version"):
-                assert_live_armed(changed, root, "account", trading_date)
+            assert_live_armed(changed, root, "account")
+
+    def test_persistent_authorization_is_bound_to_account_and_all_risk_fields(self) -> None:
+        settings = SimpleNamespace(
+            mode="LIVE",
+            live_trading=True,
+            strategy_version="strategy_v1",
+            risk=risk_settings(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_live(root, "account", settings)
+            with self.assertRaisesRegex(RuntimeError, "selected account"):
+                assert_live_armed(settings, root, "different-account")
+            changed = SimpleNamespace(
+                mode="LIVE",
+                live_trading=True,
+                strategy_version="strategy_v1",
+                risk=replace(risk_settings(), max_daily_loss_fraction=0.07),
+            )
+            with self.assertRaisesRegex(RuntimeError, "hard-risk settings"):
+                assert_live_armed(changed, root, "account")
+
+    def test_legacy_daily_arm_cannot_authorize_persistent_live(self) -> None:
+        settings = SimpleNamespace(
+            mode="LIVE",
+            live_trading=True,
+            strategy_version="strategy_v1",
+            risk=risk_settings(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".local/state/live_arm.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"schema_version":2}', encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "current schema"):
+                assert_live_armed(settings, root, "account")
 
     def test_ledger_order_upsert_preserves_one_row(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
