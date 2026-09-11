@@ -8,6 +8,7 @@ from openai import OpenAI
 from .config import Settings
 from .robinhood_oauth import MCP_URL, RobinhoodOAuth
 from .credential_store import get_openai_api_key
+from .research import estimate_model_cost
 
 
 READ_ONLY_TOOLS = [
@@ -33,11 +34,6 @@ class SnapshotResult:
     input_tokens: int
     output_tokens: int
     estimated_cost_usd: float
-
-
-def _estimate_luna_cost(input_tokens: int, output_tokens: int) -> float:
-    # GPT-5.6 Luna public pricing as of 2026-09-10.
-    return input_tokens * 0.20 / 1_000_000 + output_tokens * 1.20 / 1_000_000
 
 
 def get_account_snapshot(settings: Settings) -> SnapshotResult:
@@ -77,7 +73,7 @@ def get_account_snapshot(settings: Settings) -> SnapshotResult:
     usage = response.usage
     input_tokens = int(usage.input_tokens if usage else 0)
     output_tokens = int(usage.output_tokens if usage else 0)
-    cost = _estimate_luna_cost(input_tokens, output_tokens)
+    cost = estimate_model_cost(settings.openai_model, input_tokens, output_tokens)
     if cost > settings.max_estimated_cost_per_run_usd:
         raise RuntimeError("LLM run exceeded configured per-run cost limit")
     return SnapshotResult(

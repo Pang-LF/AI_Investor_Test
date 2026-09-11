@@ -16,8 +16,11 @@ from .ledger import Ledger
 from .robinhood_mcp import RobinhoodMCPClient
 
 
-LUNA_INPUT_PRICE = 0.20 / 1_000_000
-LUNA_OUTPUT_PRICE = 1.20 / 1_000_000
+MODEL_PRICES_PER_MILLION = {
+    "gpt-5.6-luna": (0.20, 1.20),
+    "gpt-5.6-terra": (2.00, 12.00),
+    "gpt-5.6-sol": (4.00, 20.00),
+}
 
 
 class CandidateAssessment(BaseModel):
@@ -38,6 +41,7 @@ class ResearchAssessment(BaseModel):
 
 @dataclass(frozen=True)
 class ResearchResult:
+    model: str
     assessment: Dict[str, Any]
     source_tools: tuple[str, ...]
     input_tokens: int
@@ -46,8 +50,12 @@ class ResearchResult:
     latency_seconds: float
 
 
-def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
-    return input_tokens * LUNA_INPUT_PRICE + output_tokens * LUNA_OUTPUT_PRICE
+def estimate_model_cost(model: str, input_tokens: int, output_tokens: int) -> float:
+    try:
+        input_price, output_price = MODEL_PRICES_PER_MILLION[model]
+    except KeyError as exc:
+        raise RuntimeError(f"No audited pricing configured for model: {model}") from exc
+    return (input_tokens * input_price + output_tokens * output_price) / 1_000_000
 
 
 def _compact(value: Any, max_chars: int = 24_000) -> str:
@@ -56,7 +64,9 @@ def _compact(value: Any, max_chars: int = 24_000) -> str:
 
 
 def collect_research(
-    client: RobinhoodMCPClient, symbols: Sequence[str]
+    client: RobinhoodMCPClient,
+    symbols: Sequence[str],
+    deep_candidate_count: int,
 ) -> tuple[Dict[str, Any], tuple[str, ...]]:
     chosen = list(dict.fromkeys(symbol.upper() for symbol in symbols))[:10]
     if not chosen:
@@ -69,11 +79,17 @@ def collect_research(
     tools.append("get_equity_fundamentals")
     payload["financials"] = client.call_tool("get_financials", {"symbols": chosen})
     tools.append("get_financials")
-    focus = chosen[0]
-    payload["earnings"] = client.call_tool("get_earnings_results", {"symbol": focus})
-    tools.append("get_earnings_results")
-    payload["news"] = client.call_tool("get_equity_news", {"symbol": focus})
-    tools.append("get_equity_news")
+    payload["earnings"] = {}
+    payload["news"] = {}
+    for symbol in chosen[:deep_candidate_count]:
+        payload["earnings"][symbol] = client.call_tool(
+            "get_earnings_results", {"symbol": symbol}
+        )
+        tools.append("get_earnings_results")
+        payload["news"][symbol] = client.call_tool(
+            "get_equity_news", {"symbol": symbol}
+        )
+        tools.append("get_equity_news")
     return payload, tuple(tools)
 
 
@@ -84,12 +100,13 @@ def analyze_candidates(
     run_id: str,
     forecasts: Sequence[AssetForecast],
     regime: MarketRegime,
+    market_context: Mapping[str, Any],
     research: Mapping[str, Any],
     source_tools: Sequence[str],
 ) -> ResearchResult:
     month = datetime.now(timezone.utc).strftime("%Y-%m")
-    maximum_call_cost = _estimate_cost(
-        settings.max_input_tokens, settings.max_output_tokens
+    maximum_call_cost = estimate_model_cost(
+        settings.openai_model, settings.max_input_tokens, settings.max_output_tokens
     )
     if maximum_call_cost > settings.max_estimated_cost_per_run_usd:
         raise RuntimeError("Configured token caps exceed per-run dollar cap")
@@ -100,6 +117,7 @@ def analyze_candidates(
         raise RuntimeError("OpenAI API key is unavailable")
     evidence = {
         "regime": regime.to_dict(),
+        "intraday_market_context": dict(market_context),
         "quantitative_forecasts": [item.to_dict() for item in forecasts],
         "robinhood_public_research": research,
     }
@@ -116,8 +134,8 @@ def analyze_candidates(
     started = time.monotonic()
     response = OpenAI(
         api_key=api_key,
-        timeout=90.0,
-        max_retries=1,
+        timeout=480.0,
+        max_retries=0,
     ).responses.parse(
         model=settings.openai_model,
         store=False,
@@ -134,11 +152,12 @@ def analyze_candidates(
     output_tokens = int(usage.output_tokens if usage else 0)
     if input_tokens > settings.max_input_tokens or output_tokens > settings.max_output_tokens:
         raise RuntimeError("LLM token budget exceeded; new buys are blocked")
-    cost = _estimate_cost(input_tokens, output_tokens)
+    cost = estimate_model_cost(settings.openai_model, input_tokens, output_tokens)
     if cost > settings.max_estimated_cost_per_run_usd:
         raise RuntimeError("LLM dollar budget exceeded; new buys are blocked")
     ledger.record_llm_usage(run_id, settings.openai_model, input_tokens, output_tokens, cost)
     return ResearchResult(
+        model=settings.openai_model,
         assessment=response.output_parsed.model_dump(),
         source_tools=tuple(source_tools),
         input_tokens=input_tokens,

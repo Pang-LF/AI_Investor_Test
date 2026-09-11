@@ -48,7 +48,10 @@ Robinhood quotes are fetched in exactly three batches of 20. For every symbol th
 monitor stores the last regular-hours trade and time, bid, ask, adjusted previous
 close, official prior close, state, and `has_traded`. A missing symbol, malformed
 timestamp, or any quote older than 30 minutes rejects the entire observation
-cycle. Normal cycles never call the LLM.
+cycle. From the same snapshots it derives advancing/declining breadth, median
+daily move, cross-sectional dispersion, median/maximum spread, fixed-ETF moves,
+and the ten largest moves since the prior 15-minute snapshot. These features add
+market context without another API call. Normal cycles never call the LLM.
 
 Deterministic price triggers are 2% from adjusted previous close for general
 names and 1% for current positions. A decision run is eligible in the 15-minute
@@ -78,33 +81,33 @@ capped at +/-4% for 5 days and +/-8% for 20 days. Validation error is
 used to calculate an approximate probability of positive excess return.
 
 A new candidate must have expected 20-day excess return of at least 0.5% and at
-least 55% probability of outperforming SPY. At most three new names proceed;
-current holdings are also evaluated so the system can decide whether to retain
-or exit them.
+least 55% probability of outperforming SPY. Up to ten names proceed to research
+in total. Current holdings take priority within those ten so the system can
+explicitly decide whether to retain or exit them; remaining slots go to the
+highest-ranked new candidates.
 
 ## LLM research gate
 
-The program, not the LLM, retrieves up to four research payloads:
+The program, not the LLM, makes up to twelve bounded research calls:
 
-- fundamentals for all candidates;
-- financial statements for all candidates;
-- earnings results for the top quantitative candidate;
-- news for the top quantitative candidate.
+- fundamentals for up to ten candidates/current holdings;
+- financial statements for those same names;
+- earnings results for the top five research names;
+- news for the top five research names.
 
 The prompt contains the market regime, numeric forecasts, signals, uncertainty,
 and those research payloads. External text is explicitly treated as untrusted
-data. GPT-5.6 Luna runs with low reasoning effort and Structured Outputs. It must
+data. GPT-5.6 Terra runs with low reasoning effort and Structured Outputs. It must
 return `allow`, `veto`, or `insufficient_evidence`, plus a concise rationale,
 bull case, bear case, and falsification condition for each name.
 
-The OpenAI client uses a 90-second request timeout and at most one SDK retry.
-Even if a late retry eventually succeeds, the separate 180-second decision-age
-gate can still reject the resulting order.
+The OpenAI client uses a 480-second request timeout and no SDK retry. The
+separate 600-second decision-age gate rejects a result that arrives too late.
 
 The LLM cannot set a forecast, weight, quantity, order type, risk limit, or place
 an order. A name that is missing from the response, vetoed, or marked
 insufficient does not enter the optimizer. The system allows one LLM call per
-decision, 12,000 input tokens, 1,200 output tokens, $0.05 per call, and $2.50 per
+decision, 40,000 input tokens, 2,400 output tokens, $0.15 per call, and $8 per
 month. Ordinary monitor cycles use no LLM tokens.
 
 ## Portfolio construction
@@ -134,7 +137,7 @@ the approved buy universe, and sufficient cash.
 
 To prevent latency from turning a valid analysis into a stale trade, execution
 refetches the candidate quote after the LLM finishes. An order is rejected if the
-whole decision is older than 180 seconds or the fresh price moved more than 1%
+whole decision is older than 600 seconds or the fresh price moved more than 1%
 from the monitor snapshot. These checks are in code, not the prompt.
 
 Robinhood's nonplacing review runs next. A deterministic UUID derived from the
@@ -165,9 +168,10 @@ therefore blocks trading.
 
 ## Latency expectations and remaining limitations
 
-The first real integration test for four research tools plus the Luna call took
-about 17 seconds end to end. This is an observation, not a guaranteed service
-level. Network, Robinhood, OpenAI, or SMTP latency can vary. The 180-second age,
+The first real integration test for four research tools plus a Luna call took
+about 17 seconds end to end before the Terra/ten-name upgrade. This is not a
+Terra latency guarantee. Network, Robinhood, OpenAI, or SMTP latency can vary.
+The 600-second age,
 60-second execution-quote freshness, and 1% price-drift checks fail closed when
 the situation has materially changed. Email happens after execution.
 

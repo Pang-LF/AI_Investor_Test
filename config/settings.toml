@@ -1,15 +1,15 @@
 mode = "LIVE"
 live_trading = true
-strategy_version = "strategy_v0.2.0"
-prompt_version = "research_v0.1.0"
-openai_model = "gpt-5.6-luna"
-max_input_tokens = 12000
-max_output_tokens = 1200
+strategy_version = "strategy_v0.3.0"
+prompt_version = "research_v0.2.0"
+openai_model = "gpt-5.6-terra"
+max_input_tokens = 40000
+max_output_tokens = 2400
 max_llm_calls_per_run = 1
-max_tool_calls_per_run = 4
+max_tool_calls_per_run = 12
 max_mcp_calls_per_decision_run = 50
-max_estimated_cost_per_run_usd = 0.05
-max_monthly_llm_budget_usd = 2.50
+max_estimated_cost_per_run_usd = 0.15
+max_monthly_llm_budget_usd = 8.00
 notification_required = true
 
 [monitor]
@@ -45,10 +45,13 @@ min_history_bars = 100
 ridge_penalty = 8.0
 min_training_samples = 500
 shrinkage = 0.35
-candidate_count = 3
+candidate_count = 10
 min_probability_positive = 0.55
 min_expected_excess_return_20d = 0.005
 max_abs_forecast_20d = 0.08
+
+[research]
+deep_candidate_count = 5
 
 [portfolio]
 max_invested_fraction = 1.0
@@ -59,7 +62,7 @@ optimizer_step_size = 0.5
 min_trade_usd = 10.0
 
 [risk]
-policy_version = "hard_risk_v1.2"
+policy_version = "hard_risk_v1.3"
 allow_margin = false
 allow_options = false
 allow_short_selling = false
@@ -75,7 +78,7 @@ max_daily_loss_fraction = 0.08
 max_live_orders_per_day = 10
 max_spread_fraction = 0.003
 max_execution_quote_age_seconds = 60
-max_decision_age_seconds = 180
+max_decision_age_seconds = 600
 max_decision_price_drift_fraction = 0.01
 
 [execution]

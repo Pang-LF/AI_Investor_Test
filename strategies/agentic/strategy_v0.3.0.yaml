@@ -1,0 +1,80 @@
+strategy_id: agentic_single_account
+version: strategy_v0.3.0
+effective_date: 2026-09-10
+owner: system_and_user
+supersedes: strategy_v0.2.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan:
+    initial_usd: 1000
+    month_1_usd: 1000
+    month_2_usd: 1000
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  universe_size: 60
+  quote_batches: 3
+  fields:
+    - regular_session_last_price_and_time
+    - bid_and_ask
+    - adjusted_previous_close
+    - official_previous_close
+    - trading_state
+    - has_traded
+  derived_snapshot_features:
+    - advancing_and_declining_breadth
+    - median_daily_move
+    - cross_sectional_dispersion
+    - median_and_maximum_spread
+    - fixed_etf_moves
+    - largest_moves_since_prior_snapshot
+
+prediction:
+  model: pooled_ridge_v0.1.0
+  horizons_days: [5, 20]
+  maximum_new_candidates: 10
+  minimum_expected_excess_return_20d: 0.005
+  minimum_probability_positive_excess_20d: 0.55
+  current_holdings_take_research_priority: true
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  reasoning_effort: low
+  maximum_names: 10
+  fundamentals_and_financials_names: 10
+  earnings_and_news_names: 5
+  maximum_calls_per_decision: 1
+  maximum_input_tokens: 40000
+  maximum_output_tokens: 2400
+  request_timeout_seconds: 480
+  verdicts: [allow, veto, insufficient_evidence]
+
+execution_freshness:
+  maximum_decision_age_seconds: 600
+  maximum_execution_quote_age_seconds: 60
+  maximum_price_drift_from_trigger: 0.01
+  refresh_quote_after_llm: true
+
+change_log:
+  - changed_at: 2026-09-10
+    changed_by: user
+    reason: Three candidates were too narrow for opportunity discovery.
+    changes:
+      - increased_new_candidates_from_3_to_10
+      - expanded_earnings_and_news_from_1_to_5_names
+  - changed_at: 2026-09-10
+    changed_by: user_and_system
+    reason: Replace the cost-first Luna model with a stronger balanced model.
+    changes:
+      - changed_base_model_from_gpt_5_6_luna_to_gpt_5_6_terra
+      - raised_monthly_llm_budget_from_2_50_to_8_00_usd
+  - changed_at: 2026-09-10
+    changed_by: user
+    reason: Permit a slower high-quality LLM response when the market has not materially moved.
+    changes:
+      - extended_request_timeout_from_90_to_480_seconds
+      - extended_decision_age_from_180_to_600_seconds
+      - retained_fresh_quote_and_1_percent_price_drift_rejection

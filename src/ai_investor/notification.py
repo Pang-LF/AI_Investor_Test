@@ -38,6 +38,7 @@ def build_decision_email(
     cash: float,
     quote_count: int,
     triggers: Sequence[Mapping[str, Any]],
+    intraday_market_summary: Mapping[str, Any],
     regime: MarketRegime,
     forecasts: Sequence[AssetForecast],
     research: ResearchResult,
@@ -66,6 +67,8 @@ def build_decision_email(
             regime.positive_breadth_20d,
         ),
         f"Triggers: {json.dumps(list(triggers)[:10], ensure_ascii=False, default=str)}",
+        "Intraday market summary: "
+        + json.dumps(dict(intraday_market_summary), ensure_ascii=False, default=str),
         "",
         "Candidate analysis:",
     ]
@@ -102,7 +105,8 @@ def build_decision_email(
             json.dumps(list(orders), ensure_ascii=False, indent=2, default=str),
             "",
             (
-                f"LLM: input={research.input_tokens}, output={research.output_tokens}, "
+                f"LLM: model={research.model}, input={research.input_tokens}, "
+                f"output={research.output_tokens}, "
                 f"cost=${research.estimated_cost_usd:.6f}, "
                 f"latency={research.latency_seconds:.2f}s"
             ),

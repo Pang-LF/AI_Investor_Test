@@ -216,7 +216,18 @@ def run_agent_cycle(
                     detail=str(exc),
                 )
             research_started = time.monotonic()
-            research_payload, source_tools = collect_research(client, [item.symbol for item in research_set])
+            expected_research_calls = 2 + 2 * min(
+                len(research_set), settings.research.deep_candidate_count
+            )
+            if expected_research_calls > settings.max_tool_calls_per_run:
+                raise RuntimeError(
+                    "Configured research plan exceeds the per-run tool-call budget"
+                )
+            research_payload, source_tools = collect_research(
+                client,
+                [item.symbol for item in research_set],
+                settings.research.deep_candidate_count,
+            )
             timings["research_tools_seconds"] = round(
                 time.monotonic() - research_started, 3
             )
@@ -224,6 +235,7 @@ def run_agent_cycle(
                 research = analyze_candidates(
                     settings=settings, ledger=ledger, run_id=run_id,
                     forecasts=research_set, regime=regime,
+                    market_context=monitor_payload.get("market_summary") or {},
                     research=research_payload, source_tools=source_tools,
                 )
             except Exception as exc:
@@ -300,6 +312,7 @@ def run_agent_cycle(
                 cash=state.cash,
                 quote_count=monitor.quote_count,
                 triggers=monitor.triggers,
+                intraday_market_summary=monitor_payload.get("market_summary") or {},
                 regime=regime,
                 forecasts=research_set,
                 research=research,
@@ -319,6 +332,7 @@ def run_agent_cycle(
                 "strategy_version": settings.strategy_version, "risk_policy_version": settings.risk.policy_version,
                 "llm_model": settings.openai_model, "llm_usage": asdict(research),
                 "market_snapshot": monitor_payload.get("quotes", []),
+                "intraday_market_summary": monitor_payload.get("market_summary") or {},
                 "current_positions": [asdict(item) for item in state.positions],
                 "candidate_stocks": [item.to_dict() for item in research_set],
                 "excluded_short_history": missing_history,

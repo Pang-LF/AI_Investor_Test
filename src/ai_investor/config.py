@@ -122,8 +122,20 @@ class ForecastSettings:
             raise RuntimeError("Forecasting requires at least 80 completed daily bars")
         if not 0 < settings.shrinkage <= 1:
             raise RuntimeError("Forecast shrinkage must be in (0, 1]")
-        if settings.candidate_count < 1 or settings.candidate_count > 5:
-            raise RuntimeError("Candidate count must remain between one and five")
+        if settings.candidate_count < 1 or settings.candidate_count > 10:
+            raise RuntimeError("Candidate count must remain between one and ten")
+        return settings
+
+
+@dataclass(frozen=True)
+class ResearchSettings:
+    deep_candidate_count: int
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "ResearchSettings":
+        settings = cls(deep_candidate_count=int(raw["deep_candidate_count"]))
+        if not 1 <= settings.deep_candidate_count <= 5:
+            raise RuntimeError("Deep news/earnings research must cover 1-5 names")
         return settings
 
 
@@ -225,8 +237,8 @@ class RiskSettings:
             raise RuntimeError("Daily loss circuit breaker may not exceed 8%")
         if not 0 < settings.max_portfolio_drawdown_fraction <= 0.20:
             raise RuntimeError("Portfolio drawdown circuit breaker may not exceed 20%")
-        if not 30 <= settings.max_decision_age_seconds <= 300:
-            raise RuntimeError("Decision-to-order age must remain between 30 and 300 seconds")
+        if not 30 <= settings.max_decision_age_seconds <= 600:
+            raise RuntimeError("Decision-to-order age must remain between 30 and 600 seconds")
         if not 0 < settings.max_decision_price_drift_fraction <= 0.02:
             raise RuntimeError("Decision price drift cap may not exceed 2%")
         return settings
@@ -303,6 +315,7 @@ class Settings:
     notification_required: bool
     monitor: MonitorSettings
     forecast: ForecastSettings
+    research: ResearchSettings
     portfolio: PortfolioSettings
     risk: RiskSettings
     execution: ExecutionSettings
@@ -327,8 +340,8 @@ class Settings:
             )
         if int(raw["max_llm_calls_per_run"]) != 1:
             raise RuntimeError("Decision runs must use exactly one bounded LLM call")
-        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 4:
-            raise RuntimeError("LLM/MCP research tool budget may not exceed four")
+        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 12:
+            raise RuntimeError("Research tool budget may not exceed twelve")
         if not 1 <= int(raw["max_mcp_calls_per_decision_run"]) <= 50:
             raise RuntimeError("Decision MCP call budget must be between one and fifty")
 
@@ -354,6 +367,7 @@ class Settings:
             notification_required=bool(raw["notification_required"]),
             monitor=MonitorSettings.from_dict(raw["monitor"]),
             forecast=ForecastSettings.from_dict(raw["forecast"]),
+            research=ResearchSettings.from_dict(raw["research"]),
             portfolio=PortfolioSettings.from_dict(raw["portfolio"]),
             risk=RiskSettings.from_dict(raw["risk"]),
             execution=ExecutionSettings.from_dict(raw["execution"]),

@@ -7,6 +7,7 @@ from pathlib import Path
 from ai_investor.config import Settings
 from ai_investor.monitor import (
     is_regular_market_window,
+    market_summary,
     quote_batches,
     quotes_are_fresh,
 )
@@ -102,6 +103,30 @@ class SafetyTests(unittest.TestCase):
                 "America/New_York",
             )
         )
+
+    def test_market_summary_uses_all_quotes_and_previous_snapshot(self) -> None:
+        records = [
+            {
+                "symbol": "SPY", "last_trade_price": "102",
+                "adjusted_previous_close": "100", "bid_price": "101.9",
+                "ask_price": "102.1",
+            },
+            {
+                "symbol": "AAA", "last_trade_price": "98",
+                "adjusted_previous_close": "100", "bid_price": "97.9",
+                "ask_price": "98.1",
+            },
+        ]
+        previous = {
+            "SPY": {"last_trade_price": "101"},
+            "AAA": {"last_trade_price": "100"},
+        }
+        summary = market_summary(records, previous, ["SPY"])
+        self.assertEqual(summary["advancers"], 1)
+        self.assertEqual(summary["decliners"], 1)
+        self.assertEqual(summary["positive_breadth"], 0.5)
+        self.assertEqual(summary["fixed_etf_changes"]["SPY"], 0.02)
+        self.assertEqual(summary["largest_interval_moves"][0]["symbol"], "AAA")
 
     def test_live_requires_two_matching_switches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

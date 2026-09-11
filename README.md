@@ -24,9 +24,9 @@ Every 15 minutes during regular US market hours:
    15:30 ET, or on a deterministic move trigger, with at most three per day.
 3. A pooled, regularized model estimates 5- and 20-day SPY-relative returns from
    prior completed daily bars. Current-day prices never enter model training.
-4. Up to three quantitative candidates plus current holdings receive one
-   structured GPT-5.6 Luna research call using fundamentals, financials,
-   earnings, and news. The LLM can allow or veto; it cannot size an order.
+4. Up to ten quantitative candidates/current holdings receive one structured
+   GPT-5.6 Terra research call. All receive fundamentals and financials; the top
+   five receive earnings and news. The LLM can allow or veto; it cannot size an order.
 5. A long-only covariance-shrinkage optimizer creates target weights including
    cash. No-trade and 100% cash are valid outputs.
 6. The independent hard-risk engine checks the target and fresh execution quote.
@@ -34,7 +34,7 @@ Every 15 minutes during regular US market hours:
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.2.0.yaml`](strategies/agentic/strategy_v0.2.0.yaml).
+[`strategies/agentic/strategy_v0.3.0.yaml`](strategies/agentic/strategy_v0.3.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -42,10 +42,11 @@ The full implemented data and decision flow is documented in
 ## Cost controls
 
 - One LLM call per decision; no LLM call on ordinary 15-minute monitor cycles.
-- Maximum 12,000 input and 1,200 output tokens.
-- Maximum $0.05 per call and $2.50 total LLM spend per month.
-- Four public-research calls and 50 total Robinhood MCP calls per decision run.
-- The first real integration research call cost about $0.0032.
+- Maximum 40,000 input and 2,400 output tokens.
+- Maximum $0.15 per call and $8 total LLM spend per month.
+- Twelve public-research calls and 50 total Robinhood MCP calls per decision run.
+- The earlier three-name Luna integration call cost about $0.0032; Terra/ten-name
+  runs will cost more and are measured individually in the ledger and email.
 
 ## Commands
 

@@ -16,6 +16,7 @@ class NotificationTests(unittest.TestCase):
             AssetForecast("BBB", "2026-01-01", .00, .02, .5, .6, .01, .02, {}),
         ]
         research = ResearchResult(
+            model="gpt-5.6-terra",
             assessment={
                 "market_summary": "mixed",
                 "candidates": [
@@ -31,6 +32,7 @@ class NotificationTests(unittest.TestCase):
         subject, body = build_decision_email(
             run_id="r", timestamp="2026-01-01T15:00:00Z", mode="SHADOW",
             portfolio_value=1000, cash=1000, quote_count=60, triggers=[],
+            intraday_market_summary={},
             regime=MarketRegime("mixed", .01, .02, .2, .5), forecasts=forecasts,
             research=research, target_weights={"AAA": .5}, orders=[], timings={},
         )

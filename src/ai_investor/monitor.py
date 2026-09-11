@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass
 from datetime import datetime, time as clock_time, timezone
 from pathlib import Path
+from statistics import fmean, median
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 from zoneinfo import ZoneInfo
 
@@ -200,6 +202,90 @@ def _append_log(path: Path, payload: Dict[str, Any]) -> None:
         handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
 
 
+def _previous_quotes(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Return the most recent logged quote set before the current cycle."""
+    if not path.exists():
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        quotes = payload.get("quotes") or []
+        result = {
+            str(item.get("symbol") or "").upper(): dict(item)
+            for item in quotes
+            if item.get("symbol")
+        }
+        if result:
+            return result
+    return {}
+
+
+def market_summary(
+    records: Sequence[Dict[str, Any]],
+    previous: Dict[str, Dict[str, Any]],
+    fixed_etfs: Sequence[str],
+) -> Dict[str, Any]:
+    """Derive cheap cross-sectional and interval features from quote snapshots."""
+    daily_changes: Dict[str, float] = {}
+    spreads: List[float] = []
+    interval_moves: List[Dict[str, Any]] = []
+    for record in records:
+        symbol = str(record.get("symbol") or "").upper()
+        last = _float(record.get("last_trade_price"))
+        prior_close = _float(record.get("adjusted_previous_close"))
+        bid = _float(record.get("bid_price"))
+        ask = _float(record.get("ask_price"))
+        if symbol and last > 0 and prior_close > 0:
+            daily_changes[symbol] = last / prior_close - 1.0
+        midpoint = (bid + ask) / 2.0
+        if bid > 0 and ask >= bid and midpoint > 0:
+            spreads.append((ask - bid) / midpoint)
+        prior = previous.get(symbol) or {}
+        prior_last = _float(prior.get("last_trade_price"))
+        if symbol and last > 0 and prior_last > 0:
+            interval_moves.append(
+                {
+                    "symbol": symbol,
+                    "return": round(last / prior_last - 1.0, 6),
+                }
+            )
+
+    changes = list(daily_changes.values())
+    advancers = sum(change > 0 for change in changes)
+    decliners = sum(change < 0 for change in changes)
+    unchanged = len(changes) - advancers - decliners
+    mean_change = fmean(changes) if changes else 0.0
+    dispersion = (
+        math.sqrt(fmean((change - mean_change) ** 2 for change in changes))
+        if changes
+        else 0.0
+    )
+    interval_moves.sort(key=lambda item: abs(item["return"]), reverse=True)
+    return {
+        "symbols_with_valid_change": len(changes),
+        "advancers": advancers,
+        "decliners": decliners,
+        "unchanged": unchanged,
+        "positive_breadth": round(advancers / len(changes), 6) if changes else 0.0,
+        "median_change_from_previous_close": round(median(changes), 6) if changes else 0.0,
+        "cross_sectional_dispersion": round(dispersion, 6),
+        "median_spread_fraction": round(median(spreads), 6) if spreads else None,
+        "maximum_spread_fraction": round(max(spreads), 6) if spreads else None,
+        "fixed_etf_changes": {
+            symbol: round(daily_changes[symbol], 6)
+            for symbol in fixed_etfs
+            if symbol in daily_changes
+        },
+        "largest_interval_moves": interval_moves[:10],
+    }
+
+
 def run_monitor_cycle(
     settings: Settings,
     root: Path,
@@ -332,8 +418,13 @@ def run_monitor_cycle(
                 log_path=str(log_path),
                 llm_calls=0,
             )
-        trigger_rows = _triggers(records, entries, settings)
         log_path = root / "logs" / "market" / f"{trading_date}.jsonl"
+        trigger_rows = _triggers(records, entries, settings)
+        summary = market_summary(
+            records,
+            _previous_quotes(log_path),
+            settings.monitor.fixed_etfs,
+        )
         _append_log(
             log_path,
             {
@@ -343,6 +434,7 @@ def run_monitor_cycle(
                 "monitor_interval_minutes": settings.monitor.interval_minutes,
                 "universe": entries_to_json(entries),
                 "quotes": records,
+                "market_summary": summary,
                 "missing_symbols": list(missing),
                 "triggers": trigger_rows,
                 "mcp_tool_calls": client.call_count,
