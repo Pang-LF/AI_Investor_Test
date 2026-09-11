@@ -66,3 +66,6 @@ cancel them in Robinhood if necessary.
 - Each order requires a current quote, no more than 0.30% bid/ask spread,
   account-specific tradability, cash availability, Robinhood order review, and
   a deterministic idempotency UUID.
+- A decision older than 180 seconds or a post-LLM price move over 1% is rejected.
+- SMTP must be configured when `notification_required = true`; otherwise the
+  system monitors but does not call the LLM or trade.

@@ -1,0 +1,53 @@
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from ai_investor.credential_store import SMTPConfig
+from ai_investor.forecasting import AssetForecast, MarketRegime
+from ai_investor.notification import build_decision_email, send_or_queue
+from ai_investor.research import ResearchResult
+
+
+class NotificationTests(unittest.TestCase):
+    def test_email_explains_selected_and_rejected_names(self) -> None:
+        forecasts = [
+            AssetForecast("AAA", "2026-01-01", .01, .03, .6, .7, .01, .02, {}),
+            AssetForecast("BBB", "2026-01-01", .00, .02, .5, .6, .01, .02, {}),
+        ]
+        research = ResearchResult(
+            assessment={
+                "market_summary": "mixed",
+                "candidates": [
+                    {"symbol": "AAA", "verdict": "allow", "bull_case": "b",
+                     "bear_case": "r", "falsification": "f", "concise_rationale": "ok"},
+                    {"symbol": "BBB", "verdict": "veto", "bull_case": "b",
+                     "bear_case": "r", "falsification": "f", "concise_rationale": "no"},
+                ],
+            },
+            source_tools=("fundamentals",), input_tokens=100, output_tokens=50,
+            estimated_cost_usd=.001, latency_seconds=2.5,
+        )
+        subject, body = build_decision_email(
+            run_id="r", timestamp="2026-01-01T15:00:00Z", mode="SHADOW",
+            portfolio_value=1000, cash=1000, quote_count=60, triggers=[],
+            regime=MarketRegime("mixed", .01, .02, .2, .5), forecasts=forecasts,
+            research=research, target_weights={"AAA": .5}, orders=[], timings={},
+        )
+        self.assertIn("AAA", subject)
+        self.assertIn("SELECTED: target weight=50.00%", body)
+        self.assertIn("NOT SELECTED: LLM verdict=veto", body)
+
+    def test_failed_delivery_is_persisted_to_outbox(self) -> None:
+        config = SMTPConfig("smtp.example.com", 465, "u", "p", "a@b.com", "c@d.com")
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("ai_investor.notification._deliver", side_effect=OSError("offline")):
+                result = send_or_queue(
+                    Path(directory), run_id="r", subject="s", body="b", config=config
+                )
+            self.assertEqual(result.status, "queued")
+            self.assertTrue((Path(directory) / ".local/notification_outbox/r.json").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

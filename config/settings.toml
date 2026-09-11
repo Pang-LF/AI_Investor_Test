@@ -10,6 +10,7 @@ max_tool_calls_per_run = 4
 max_mcp_calls_per_decision_run = 50
 max_estimated_cost_per_run_usd = 0.05
 max_monthly_llm_budget_usd = 2.50
+notification_required = true
 
 [monitor]
 interval_minutes = 15
@@ -58,7 +59,7 @@ optimizer_step_size = 0.5
 min_trade_usd = 10.0
 
 [risk]
-policy_version = "hard_risk_v1.1"
+policy_version = "hard_risk_v1.2"
 allow_margin = false
 allow_options = false
 allow_short_selling = false
@@ -74,6 +75,8 @@ max_daily_loss_fraction = 0.08
 max_live_orders_per_day = 10
 max_spread_fraction = 0.003
 max_execution_quote_age_seconds = 60
+max_decision_age_seconds = 180
+max_decision_price_drift_fraction = 0.01
 
 [execution]
 max_decision_runs_per_day = 3

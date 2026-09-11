@@ -7,10 +7,16 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .config import Settings
-from .credential_store import set_openai_api_key
+from .credential_store import (
+    SMTPConfig,
+    get_smtp_config,
+    set_openai_api_key,
+    set_smtp_config,
+)
 from .agent import run_agent_cycle
 from .execution import arm_live, execution_toolset, fetch_broker_state
 from .monitor import run_monitor_cycle
+from .notification import send_or_queue
 from .robinhood_mcp import RobinhoodMCPClient
 from .robinhood_oauth import RobinhoodOAuth
 from .robinhood_readonly import get_account_snapshot
@@ -28,6 +34,14 @@ def main() -> None:
     subparsers.add_parser("oauth-status")
     subparsers.add_parser("set-openai-key")
     subparsers.add_parser("account-snapshot")
+    email_parser = subparsers.add_parser("set-email")
+    email_parser.add_argument("--sender", required=True)
+    email_parser.add_argument("--recipient", required=True)
+    email_parser.add_argument("--username")
+    email_parser.add_argument("--host", default="smtp.gmail.com")
+    email_parser.add_argument("--port", type=int, default=465)
+    subparsers.add_parser("email-status")
+    subparsers.add_parser("test-email")
     monitor_parser = subparsers.add_parser("monitor-cycle")
     monitor_parser.add_argument(
         "--force",
@@ -77,6 +91,44 @@ def main() -> None:
                 }
             )
         )
+    elif args.command == "set-email":
+        password = getpass.getpass("SMTP app password (hidden): ").strip()
+        set_smtp_config(
+            SMTPConfig(
+                host=args.host,
+                port=args.port,
+                username=args.username or args.sender,
+                password=password,
+                sender=args.sender,
+                recipient=args.recipient,
+            )
+        )
+        print("SMTP configuration stored in the macOS Keychain.")
+    elif args.command == "email-status":
+        config = get_smtp_config()
+        print(
+            json.dumps(
+                {
+                    "configured": config is not None,
+                    "host": config.host if config else None,
+                    "port": config.port if config else None,
+                    "sender": config.sender if config else None,
+                    "recipient": config.recipient if config else None,
+                }
+            )
+        )
+    elif args.command == "test-email":
+        config = get_smtp_config()
+        if config is None:
+            raise RuntimeError("Run ai-investor set-email first")
+        result = send_or_queue(
+            ROOT,
+            run_id="email-connectivity-test",
+            subject="[AI Investor] Email connectivity test",
+            body="Email notification is configured. This message contains no account data.",
+            config=config,
+        )
+        print(json.dumps(asdict(result)))
     elif args.command == "monitor-cycle":
         result = run_monitor_cycle(
             settings,

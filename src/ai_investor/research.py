@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Sequence
@@ -42,6 +43,7 @@ class ResearchResult:
     input_tokens: int
     output_tokens: int
     estimated_cost_usd: float
+    latency_seconds: float
 
 
 def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
@@ -111,7 +113,12 @@ def analyze_candidates(
         "falsification statements. Do not reveal chain-of-thought.\nEVIDENCE="
         + _compact(evidence, max_chars=settings.max_input_tokens * 3)
     )
-    response = OpenAI(api_key=api_key).responses.parse(
+    started = time.monotonic()
+    response = OpenAI(
+        api_key=api_key,
+        timeout=90.0,
+        max_retries=1,
+    ).responses.parse(
         model=settings.openai_model,
         store=False,
         reasoning={"effort": "low"},
@@ -119,6 +126,7 @@ def analyze_candidates(
         input=input_text,
         text_format=ResearchAssessment,
     )
+    latency_seconds = time.monotonic() - started
     if response.output_parsed is None:
         raise RuntimeError("LLM returned no structured research assessment")
     usage = response.usage
@@ -136,6 +144,7 @@ def analyze_candidates(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         estimated_cost_usd=cost,
+        latency_seconds=latency_seconds,
     )
 
 

@@ -36,6 +36,8 @@ Every 15 minutes during regular US market hours:
 The versioned strategy is
 [`strategies/agentic/strategy_v0.2.0.yaml`](strategies/agentic/strategy_v0.2.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
+The full implemented data and decision flow is documented in
+[`docs/current_architecture.md`](docs/current_architecture.md).
 
 ## Cost controls
 
@@ -52,6 +54,7 @@ The hard-risk policy is separate in [`config/settings.toml`](config/settings.tom
 .venv/bin/ai-investor check-config
 .venv/bin/ai-investor oauth-status
 .venv/bin/ai-investor account-snapshot
+.venv/bin/ai-investor email-status
 .venv/bin/ai-investor monitor-cycle
 .venv/bin/ai-investor agent-cycle
 .venv/bin/python -m unittest discover -s tests -v
@@ -66,6 +69,14 @@ scripts/install_launchd.sh
 
 The Mac must stay awake and online. See
 [`docs/live_runbook.md`](docs/live_runbook.md) before changing to LIVE.
+
+Email summaries are mandatory before an LLM decision can trade. Configure SMTP
+credentials interactively so the password goes only to macOS Keychain:
+
+```bash
+.venv/bin/ai-investor set-email --sender you@gmail.com --recipient you@gmail.com
+.venv/bin/ai-investor test-email
+```
 
 ## Data and secret boundary
 

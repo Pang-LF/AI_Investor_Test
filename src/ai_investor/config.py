@@ -173,6 +173,8 @@ class RiskSettings:
     max_live_orders_per_day: int
     max_spread_fraction: float
     max_execution_quote_age_seconds: int
+    max_decision_age_seconds: int
+    max_decision_price_drift_fraction: float
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "RiskSettings":
@@ -197,6 +199,10 @@ class RiskSettings:
             max_execution_quote_age_seconds=int(
                 raw["max_execution_quote_age_seconds"]
             ),
+            max_decision_age_seconds=int(raw["max_decision_age_seconds"]),
+            max_decision_price_drift_fraction=float(
+                raw["max_decision_price_drift_fraction"]
+            ),
         )
         forbidden = (
             settings.allow_margin,
@@ -219,6 +225,10 @@ class RiskSettings:
             raise RuntimeError("Daily loss circuit breaker may not exceed 8%")
         if not 0 < settings.max_portfolio_drawdown_fraction <= 0.20:
             raise RuntimeError("Portfolio drawdown circuit breaker may not exceed 20%")
+        if not 30 <= settings.max_decision_age_seconds <= 300:
+            raise RuntimeError("Decision-to-order age must remain between 30 and 300 seconds")
+        if not 0 < settings.max_decision_price_drift_fraction <= 0.02:
+            raise RuntimeError("Decision price drift cap may not exceed 2%")
         return settings
 
 
@@ -290,6 +300,7 @@ class Settings:
     max_mcp_calls_per_decision_run: int
     max_estimated_cost_per_run_usd: float
     max_monthly_llm_budget_usd: float
+    notification_required: bool
     monitor: MonitorSettings
     forecast: ForecastSettings
     portfolio: PortfolioSettings
@@ -340,6 +351,7 @@ class Settings:
                 raw["max_estimated_cost_per_run_usd"]
             ),
             max_monthly_llm_budget_usd=float(raw["max_monthly_llm_budget_usd"]),
+            notification_required=bool(raw["notification_required"]),
             monitor=MonitorSettings.from_dict(raw["monitor"]),
             forecast=ForecastSettings.from_dict(raw["forecast"]),
             portfolio=PortfolioSettings.from_dict(raw["portfolio"]),

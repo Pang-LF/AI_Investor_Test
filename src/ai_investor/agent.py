@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, time as clock_time, timezone
@@ -21,6 +22,12 @@ from .forecasting import candidate_forecasts, forecast_assets, infer_market_regi
 from .ledger import Ledger
 from .market_data import HistoricalCache, get_daily_histories
 from .monitor import run_monitor_cycle
+from .notification import (
+    build_decision_email,
+    flush_outbox,
+    require_email_configuration,
+    send_or_queue,
+)
 from .portfolio import optimize_portfolio
 from .research import allowed_symbols, analyze_candidates, collect_research
 from .robinhood_mcp import RobinhoodMCPClient
@@ -96,8 +103,13 @@ def run_agent_cycle(
     no_delay: bool = False,
     now: Optional[datetime] = None,
 ) -> AgentResult:
+    cycle_started = time.monotonic()
+    flush_outbox(root)
     current = now or datetime.now(timezone.utc)
     monitor = run_monitor_cycle(settings, root, force=force_monitor, no_delay=no_delay, now=current)
+    timings: Dict[str, float] = {
+        "monitor_seconds": round(time.monotonic() - cycle_started, 3)
+    }
     if monitor.status != "completed_read_only":
         return AgentResult(status="monitor_only", monitor_status=monitor.status)
     monitor_payload = _latest_monitor_payload(monitor.log_path)
@@ -120,6 +132,9 @@ def run_agent_cycle(
             allow_order_submission=settings.mode == "LIVE" and settings.live_trading,
         ) as client:
             state = fetch_broker_state(client)
+            timings["account_state_seconds"] = round(
+                time.monotonic() - cycle_started - timings["monitor_seconds"], 3
+            )
             if settings.mode == "LIVE":
                 # Fail before research spend, then check again immediately
                 # before every placement inside execute_orders.
@@ -130,6 +145,7 @@ def run_agent_cycle(
             reconcile_orders(client, ledger, state, trading_date)
             entries = monitor_payload.get("universe") or []
             symbols = list(dict.fromkeys([str(item.get("symbol", "")).upper() for item in entries if item.get("symbol")] + [p.symbol for p in state.positions]))
+            forecast_started = time.monotonic()
             histories = get_daily_histories(
                 client, HistoricalCache(root / ".local" / "state" / "historicals"),
                 symbols, trading_date, settings.forecast.history_calendar_days,
@@ -148,11 +164,22 @@ def run_agent_cycle(
                 return AgentResult(status="insufficient_benchmark_history", run_id=run_id, decision_key=decision_key, detail=",".join(missing_history))
             forecasts, models = forecast_assets(histories, settings.forecast)
             candidates = candidate_forecasts(forecasts, settings.forecast)
+            timings["history_and_forecast_seconds"] = round(
+                time.monotonic() - forecast_started, 3
+            )
             by_symbol = {item.symbol: item for item in forecasts}
-            research_set = list(candidates)
-            for position in state.positions:
-                if position.symbol in by_symbol and position.symbol not in {item.symbol for item in research_set}:
-                    research_set.append(by_symbol[position.symbol])
+            # Existing holdings take priority so every held name receives an
+            # explicit retain/exit review before new opportunities consume the
+            # ten-name research budget.
+            research_set = [
+                by_symbol[position.symbol]
+                for position in state.positions
+                if position.symbol in by_symbol
+            ]
+            for candidate in candidates:
+                if candidate.symbol not in {item.symbol for item in research_set}:
+                    research_set.append(candidate)
+            research_set = research_set[: settings.risk.max_positions]
             if not research_set:
                 payload = {"status": "no_quantitative_opportunity", "excluded_short_history": missing_history, "model_samples": {key: value.training_samples for key, value in models.items()}}
                 ledger.record_run(
@@ -163,11 +190,74 @@ def run_agent_cycle(
                 )
                 return AgentResult(status="no_quantitative_opportunity", run_id=run_id, decision_key=decision_key)
             regime = infer_market_regime(histories)
+            try:
+                email_config = (
+                    require_email_configuration()
+                    if settings.notification_required
+                    else None
+                )
+            except RuntimeError as exc:
+                ledger.record_run(
+                    run_id=run_id,
+                    decision_key=decision_key,
+                    trading_date=trading_date,
+                    mode=settings.mode,
+                    status="blocked_notification_not_configured",
+                    strategy_version=settings.strategy_version,
+                    risk_policy_version=settings.risk.policy_version,
+                    portfolio_value=state.portfolio_value,
+                    cash=state.cash,
+                    payload={"status": "blocked_notification_not_configured"},
+                )
+                return AgentResult(
+                    status="blocked_notification_not_configured",
+                    run_id=run_id,
+                    decision_key=decision_key,
+                    detail=str(exc),
+                )
+            research_started = time.monotonic()
             research_payload, source_tools = collect_research(client, [item.symbol for item in research_set])
-            research = analyze_candidates(
-                settings=settings, ledger=ledger, run_id=run_id, forecasts=research_set,
-                regime=regime, research=research_payload, source_tools=source_tools,
+            timings["research_tools_seconds"] = round(
+                time.monotonic() - research_started, 3
             )
+            try:
+                research = analyze_candidates(
+                    settings=settings, ledger=ledger, run_id=run_id,
+                    forecasts=research_set, regime=regime,
+                    research=research_payload, source_tools=source_tools,
+                )
+            except Exception as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                delivery = send_or_queue(
+                    root,
+                    run_id=run_id,
+                    subject=f"[AI Investor] LLM call failed | {current.isoformat()[:16]}",
+                    body=(
+                        f"Run: {run_id}\nTime: {current.isoformat()}\n"
+                        f"Candidates: {', '.join(item.symbol for item in research_set)}\n"
+                        f"The LLM call failed or violated its budget. No order was created.\n"
+                        f"Error: {error}"
+                    ),
+                    config=email_config,
+                )
+                ledger.record_run(
+                    run_id=run_id, decision_key=decision_key,
+                    trading_date=trading_date, mode=settings.mode,
+                    status="llm_failed_no_trade",
+                    strategy_version=settings.strategy_version,
+                    risk_policy_version=settings.risk.policy_version,
+                    portfolio_value=state.portfolio_value, cash=state.cash,
+                    payload={
+                        "status": "llm_failed_no_trade",
+                        "error": error,
+                        "notification": asdict(delivery),
+                    },
+                )
+                return AgentResult(
+                    status="llm_failed_no_trade", run_id=run_id,
+                    decision_key=decision_key, detail=error,
+                )
+            timings["llm_seconds"] = round(research.latency_seconds, 3)
             allowed = allowed_symbols(research)
             eligible = [item for item in research_set if item.symbol in allowed]
             target = optimize_portfolio(eligible, histories, settings.portfolio, settings.risk)
@@ -196,6 +286,33 @@ def run_agent_cycle(
                     for item in entries
                     if item.get("bucket") != "position"
                 },
+                decision_started_at=current,
+                reference_prices=prices,
+            )
+            timings["decision_to_orders_seconds"] = round(
+                time.monotonic() - cycle_started, 3
+            )
+            subject, body = build_decision_email(
+                run_id=run_id,
+                timestamp=current.isoformat(),
+                mode=settings.mode,
+                portfolio_value=state.portfolio_value,
+                cash=state.cash,
+                quote_count=monitor.quote_count,
+                triggers=monitor.triggers,
+                regime=regime,
+                forecasts=research_set,
+                research=research,
+                target_weights=target.weights,
+                orders=outcomes,
+                timings=timings,
+            )
+            delivery = send_or_queue(
+                root,
+                run_id=run_id,
+                subject=subject,
+                body=body,
+                config=email_config,
             )
             payload = {
                 "run_id": run_id, "timestamp": current.isoformat(), "portfolio": "agentic",
@@ -208,6 +325,8 @@ def run_agent_cycle(
                 "reasoning_summary": research.assessment,
                 "target_portfolio": target.to_dict(), "orders": outcomes,
                 "portfolio_value": state.portfolio_value, "cash_balance": state.cash,
+                "timings": timings,
+                "notification": asdict(delivery),
             }
             ledger.record_run(
                 run_id=run_id, decision_key=decision_key, trading_date=trading_date,

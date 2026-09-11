@@ -39,6 +39,8 @@ def risk_settings() -> RiskSettings:
         max_live_orders_per_day=10,
         max_spread_fraction=0.003,
         max_execution_quote_age_seconds=60,
+        max_decision_age_seconds=180,
+        max_decision_price_drift_fraction=0.01,
     )
 
 
@@ -102,6 +104,24 @@ class ExecutionSafetyTests(unittest.TestCase):
         )
         self.assertIn("stale_quote", decision.reasons)
         self.assertIn("daily_loss_circuit_breaker", decision.reasons)
+
+    def test_old_decision_or_price_drift_blocks_order(self) -> None:
+        now = datetime.now(timezone.utc)
+        decision = approve_order(
+            OrderIntent("AAPL", "buy", 100), policy=risk_settings(),
+            portfolio_value=1000, cash=1000, positions_value={},
+            daily_order_notional=0, daily_order_count=0, daily_open_value=1000,
+            high_watermark=1000,
+            quote={
+                "last_trade_price": 102, "bid_price": 101.9, "ask_price": 102.1,
+                "last_trade_time": now.isoformat(),
+            },
+            now=now, tradable=True,
+            decision_started_at=now - timedelta(seconds=181),
+            reference_price=100,
+        )
+        self.assertIn("decision_age_limit", decision.reasons)
+        self.assertIn("decision_price_drift_limit", decision.reasons)
 
     def test_prohibited_exposure_and_leveraged_etf_are_blocked(self) -> None:
         now = datetime.now(timezone.utc)

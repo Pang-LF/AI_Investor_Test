@@ -44,6 +44,8 @@ def approve_order(
     now: datetime,
     tradable: bool,
     allowed_buy_symbols: Optional[set[str]] = None,
+    decision_started_at: Optional[datetime] = None,
+    reference_price: Optional[float] = None,
     asset_type: str = "equity",
     option_value: float = 0.0,
     crypto_value: float = 0.0,
@@ -91,6 +93,19 @@ def approve_order(
             reasons.append("stale_quote")
     except (TypeError, ValueError):
         reasons.append("missing_quote_timestamp")
+    if decision_started_at is not None:
+        decision_age = (
+            now.astimezone(timezone.utc)
+            - decision_started_at.astimezone(timezone.utc)
+        ).total_seconds()
+        if decision_age < 0 or decision_age > policy.max_decision_age_seconds:
+            reasons.append("decision_age_limit")
+    if reference_price is not None and reference_price > 0 and last > 0:
+        if (
+            abs(last / reference_price - 1.0)
+            > policy.max_decision_price_drift_fraction
+        ):
+            reasons.append("decision_price_drift_limit")
 
     is_buy = intent.side == "buy"
     if is_buy and allowed_buy_symbols is not None and symbol not in allowed_buy_symbols:

@@ -187,12 +187,20 @@ def execute_orders(
     trading_date: str,
     now: datetime,
     allowed_buy_symbols: Optional[set[str]] = None,
+    decision_started_at: Optional[datetime] = None,
+    reference_prices: Optional[Mapping[str, float]] = None,
 ) -> list[Dict[str, Any]]:
     results: list[Dict[str, Any]] = []
     for order in orders:
+        summary = {
+            "ref_id": order.ref_id,
+            "symbol": order.symbol,
+            "side": order.side,
+            "planned_notional": order.planned_notional,
+        }
         existing = ledger.get_order(order.ref_id)
         if existing and existing["status"] in NON_REPEATABLE_ORDER_STATES:
-            results.append({"ref_id": order.ref_id, "status": "duplicate_suppressed"})
+            results.append({**summary, "status": "duplicate_suppressed"})
             continue
         risk = approve_order(
             OrderIntent(order.symbol, order.side, order.planned_notional, order.quantity),
@@ -208,6 +216,8 @@ def execute_orders(
             now=now,
             tradable=tradability.get(order.symbol, False),
             allowed_buy_symbols=allowed_buy_symbols,
+            decision_started_at=decision_started_at,
+            reference_price=(reference_prices or {}).get(order.symbol),
             option_value=state.option_value,
             crypto_value=state.crypto_value,
             futures_value=state.futures_value,
@@ -223,7 +233,7 @@ def execute_orders(
             response={"risk": risk.to_dict()},
         )
         if not risk.approved:
-            results.append({"ref_id": order.ref_id, "status": status, "risk": risk.to_dict()})
+            results.append({**summary, "status": status, "risk": risk.to_dict()})
             continue
         arguments: Dict[str, Any] = {
             "account_number": state.account_number,
@@ -247,7 +257,7 @@ def execute_orders(
                 quantity=arguments.get("quantity"), dollar_amount=arguments.get("dollar_amount"),
                 planned_notional=order.planned_notional, status="review_rejected", response=review,
             )
-            results.append({"ref_id": order.ref_id, "status": "review_rejected"})
+            results.append({**summary, "status": "review_rejected"})
             continue
         if settings.mode != "LIVE":
             ledger.upsert_order(
@@ -257,7 +267,7 @@ def execute_orders(
                 quantity=arguments.get("quantity"), dollar_amount=arguments.get("dollar_amount"),
                 planned_notional=order.planned_notional, status="hypothetical_reviewed", response=review,
             )
-            results.append({"ref_id": order.ref_id, "status": "hypothetical_reviewed"})
+            results.append({**summary, "status": "hypothetical_reviewed"})
             continue
         assert_live_armed(settings, root, state.account_number, trading_date)
         placement_arguments = dict(arguments)
@@ -273,7 +283,9 @@ def execute_orders(
             planned_notional=order.planned_notional, status="submitted",
             broker_order_id=broker_id, response=placed,
         )
-        results.append({"ref_id": order.ref_id, "status": "submitted", "broker_order_id": broker_id})
+        results.append(
+            {**summary, "status": "submitted", "broker_order_id": broker_id}
+        )
     return results
 
 
