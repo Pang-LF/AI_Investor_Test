@@ -21,8 +21,10 @@ hard-risk-bound authorization is valid.
 Every 15 minutes during regular US market hours:
 
 1. A no-LLM monitor scans a 60-symbol universe and validates every quote.
-2. Most cycles end immediately. A decision run occurs only at 09:45, 13:00,
-   15:30 ET, or on a deterministic move trigger, with at most three per day.
+2. Three scheduled decisions are due at 09:45, 13:00, and 15:30 ET. A missed
+   slot is caught up on the next eligible cycle. Deterministic move triggers may
+   start up to three additional decisions per day. Every formal decision,
+   scheduled or triggered, must be at least 60 minutes after the previous one.
 3. A pooled, regularized model estimates 5- and 20-day rolling-beta-adjusted
    returns from prior completed daily bars using purged temporal validation.
 4. Up to five new research candidates plus current holdings receive one structured
@@ -38,7 +40,7 @@ Every 15 minutes during regular US market hours:
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.5.2.yaml`](strategies/agentic/strategy_v0.5.2.yaml).
+[`strategies/agentic/strategy_v0.5.3.yaml`](strategies/agentic/strategy_v0.5.3.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -47,7 +49,7 @@ The full implemented data and decision flow is documented in
 
 - One LLM call per decision; no LLM call on ordinary 15-minute monitor cycles.
 - Maximum 40,000 input and 2,400 output tokens.
-- Maximum $0.15 per call and $8 total LLM spend per month.
+- Maximum $0.15 per call and $10 total LLM spend per month.
 - Thirteen public-research calls and 50 total Robinhood MCP calls per decision run.
 - The earlier three-name Luna integration call cost about $0.0032; Terra/five-name
   runs will cost more and are measured individually in the ledger and email.

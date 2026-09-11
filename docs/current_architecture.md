@@ -77,10 +77,14 @@ and the ten largest moves since the prior 15-minute snapshot. These features add
 market context without another API call. Normal cycles never call the LLM.
 
 Deterministic price triggers are 2% from adjusted previous close for general
-names and 1% for current positions. A decision run is eligible in the 15-minute
-windows beginning 09:45, 13:00, and 15:30 ET, or when a price trigger occurs.
-SQLite limits this to three decision runs per day and suppresses duplicate
-decision keys.
+names and 1% for current positions. Three scheduled decisions are due at 09:45,
+13:00, and 15:30 ET. If the computer, data source, or cooldown is unavailable at
+the exact time, the oldest missed slot is caught up on the next eligible regular-
+market cycle. Scheduled completion is tracked across strategy versions so a
+version change cannot duplicate a slot. Price triggers have a separate quota of
+up to three decisions per trading day. Every scheduled or triggered formal
+decision shares a global 60-minute minimum interval. SQLite stores distinct
+time-specific keys and suppresses duplicate decisions.
 
 ## Quantitative prediction
 
@@ -174,7 +178,7 @@ separate 600-second decision-age gate rejects a result that arrives too late.
 The LLM cannot set a forecast, weight, quantity, order type, risk limit, or place
 an order. A name that is missing from the response, vetoed, or marked
 insufficient cannot enter the calibrated execution layer. The system allows one LLM call per
-decision, 40,000 input tokens, 2,400 output tokens, $0.15 per call, and $8 per
+decision, 40,000 input tokens, 2,400 output tokens, $0.15 per call, and $10 per
 month. Ordinary monitor cycles use no LLM tokens.
 
 ## Portfolio construction
@@ -191,7 +195,7 @@ The decision log and email expose the actual sizing terms: shrunk and bias-
 adjusted forecast, forecast uncertainty, 20-day variance, current/minimum/final
 weights, expected-return contribution, covariance penalty, estimation penalty,
 reallocation cost, and old/new objective values. There is no hidden Kelly or
-regime multiplier in v0.5.2. Structural regime and deterministic intraday tone
+regime multiplier in v0.5.3. Structural regime and deterministic intraday tone
 are reported separately and are research context only.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy

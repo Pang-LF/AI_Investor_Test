@@ -375,7 +375,8 @@ class RiskSettings:
 
 @dataclass(frozen=True)
 class ExecutionSettings:
-    max_decision_runs_per_day: int
+    max_event_decision_runs_per_day: int
+    minimum_minutes_between_decisions: int
     decision_windows: Tuple[str, ...]
     order_type: str
     time_in_force: str
@@ -384,14 +385,30 @@ class ExecutionSettings:
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ExecutionSettings":
         settings = cls(
-            max_decision_runs_per_day=int(raw["max_decision_runs_per_day"]),
+            max_event_decision_runs_per_day=int(
+                raw["max_event_decision_runs_per_day"]
+            ),
+            minimum_minutes_between_decisions=int(
+                raw["minimum_minutes_between_decisions"]
+            ),
             decision_windows=tuple(str(value) for value in raw["decision_windows"]),
             order_type=str(raw["order_type"]),
             time_in_force=str(raw["time_in_force"]),
             market_hours=str(raw["market_hours"]),
         )
-        if settings.max_decision_runs_per_day > 3:
-            raise RuntimeError("Phase 2 permits at most three decision runs per day")
+        if not 1 <= settings.max_event_decision_runs_per_day <= 3:
+            raise RuntimeError("Event-triggered decisions must remain between one and three per day")
+        if settings.minimum_minutes_between_decisions < 60:
+            raise RuntimeError("Formal decisions must remain at least 60 minutes apart")
+        if len(settings.decision_windows) != 3 or len(set(settings.decision_windows)) != 3:
+            raise RuntimeError("Exactly three distinct scheduled decision windows are required")
+        for value in settings.decision_windows:
+            try:
+                hour, minute = (int(part) for part in value.split(":"))
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Decision windows must use HH:MM") from exc
+            if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+                raise RuntimeError("Decision windows must use valid HH:MM values")
         if settings.order_type != "market" or settings.market_hours != "regular_hours":
             raise RuntimeError("Phase 2 supports regular-hours market orders only")
         if settings.time_in_force != "gfd":

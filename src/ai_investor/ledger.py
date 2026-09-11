@@ -132,12 +132,39 @@ class Ledger:
         ).fetchone()
         return row is not None
 
-    def decision_runs_today(self, trading_date: str) -> int:
+    def event_decision_runs_today(self, trading_date: str) -> int:
         row = self.connection.execute(
-            "SELECT COUNT(*) AS count FROM runs WHERE trading_date=?",
-            (trading_date,),
+            """
+            SELECT COUNT(*) AS count FROM runs
+            WHERE trading_date=? AND decision_key LIKE ?
+            """,
+            (trading_date, f"{trading_date}|market_trigger%"),
         ).fetchone()
         return int(row["count"])
+
+    def scheduled_decision_reasons(self, trading_date: str) -> set[str]:
+        rows = self.connection.execute(
+            "SELECT decision_key FROM runs WHERE trading_date=?",
+            (trading_date,),
+        ).fetchall()
+        return {
+            parts[1]
+            for row in rows
+            for parts in [str(row["decision_key"]).split("|")]
+            if len(parts) >= 2 and parts[1].startswith("scheduled_")
+        }
+
+    def last_decision_at(self, trading_date: str) -> Optional[datetime]:
+        row = self.connection.execute(
+            """
+            SELECT created_at FROM runs
+            WHERE trading_date=? ORDER BY created_at DESC LIMIT 1
+            """,
+            (trading_date,),
+        ).fetchone()
+        if not row:
+            return None
+        return datetime.fromisoformat(str(row["created_at"]).replace("Z", "+00:00"))
 
     def record_run(
         self,

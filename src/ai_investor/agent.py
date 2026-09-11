@@ -61,14 +61,23 @@ def _latest_monitor_payload(path: str) -> Dict[str, Any]:
     return json.loads(lines[-1]) if lines else {}
 
 
-def _decision_reason(now: datetime, settings: Settings, has_trigger: bool) -> Optional[str]:
+def _decision_reason(
+    now: datetime,
+    settings: Settings,
+    has_trigger: bool,
+    completed_scheduled_reasons: set[str],
+) -> Optional[str]:
     local = now.astimezone(ZoneInfo(settings.monitor.market_timezone))
     minute = local.hour * 60 + local.minute
-    for value in settings.execution.decision_windows:
+    due_windows = []
+    for value in sorted(settings.execution.decision_windows):
         hour, minute_value = (int(part) for part in value.split(":"))
         start = hour * 60 + minute_value
-        if start <= minute < start + settings.monitor.interval_minutes:
-            return "scheduled_" + value.replace(":", "")
+        if start <= minute:
+            due_windows.append("scheduled_" + value.replace(":", ""))
+    for reason in due_windows:
+        if reason not in completed_scheduled_reasons:
+            return reason
     return "market_trigger" if has_trigger else None
 
 
@@ -147,19 +156,51 @@ def run_agent_cycle(
         ("market_data", "robinhood_service", "robinhood_authentication"),
     )
     monitor_payload = _latest_monitor_payload(monitor.log_path)
-    reason = _decision_reason(current, settings, bool(monitor.triggers))
-    if reason is None:
-        return AgentResult(status="monitored_no_decision_trigger", monitor_status=monitor.status)
     local = current.astimezone(ZoneInfo(settings.monitor.market_timezone))
     trading_date = local.date().isoformat()
-    decision_key = f"{trading_date}|{reason}|{settings.strategy_version}"
-    run_id = str(uuid.uuid4())
     ledger_path = root / ".local" / "state" / "ledger.sqlite"
     with Ledger(ledger_path) as ledger:
+        reason = _decision_reason(
+            current,
+            settings,
+            bool(monitor.triggers),
+            ledger.scheduled_decision_reasons(trading_date),
+        )
+        if reason is None:
+            return AgentResult(
+                status="monitored_no_decision_trigger", monitor_status=monitor.status
+            )
+        last_decision = ledger.last_decision_at(trading_date)
+        if last_decision is not None:
+            elapsed_minutes = (
+                current.astimezone(timezone.utc) - last_decision.astimezone(timezone.utc)
+            ).total_seconds() / 60.0
+            if elapsed_minutes < settings.execution.minimum_minutes_between_decisions:
+                remaining = settings.execution.minimum_minutes_between_decisions - elapsed_minutes
+                return AgentResult(
+                    status="decision_cooldown",
+                    monitor_status=monitor.status,
+                    detail=f"{remaining:.1f} minutes remaining",
+                )
+        if reason == "market_trigger":
+            slot = local.strftime("%H%M")
+            decision_reason_key = f"market_trigger_{slot}"
+        else:
+            decision_reason_key = reason
+        decision_key = (
+            f"{trading_date}|{decision_reason_key}|{settings.strategy_version}"
+        )
+        run_id = str(uuid.uuid4())
         if ledger.decision_exists(decision_key):
             return AgentResult(status="duplicate_decision_suppressed", decision_key=decision_key)
-        if ledger.decision_runs_today(trading_date) >= settings.execution.max_decision_runs_per_day:
-            return AgentResult(status="daily_decision_budget_exhausted", decision_key=decision_key)
+        if (
+            reason == "market_trigger"
+            and ledger.event_decision_runs_today(trading_date)
+            >= settings.execution.max_event_decision_runs_per_day
+        ):
+            return AgentResult(
+                status="event_decision_budget_exhausted", decision_key=decision_key
+            )
         with RobinhoodMCPClient(
             max_calls=settings.max_mcp_calls_per_decision_run,
             allowed_tools=execution_toolset(settings.mode == "LIVE"),

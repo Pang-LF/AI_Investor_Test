@@ -295,7 +295,8 @@ class SafetyTests(unittest.TestCase):
                 "max_spread_fraction=0.003\nmax_execution_quote_age_seconds=60\n"
                 "max_decision_age_seconds=180\n"
                 "max_decision_price_drift_fraction=0.01\n"
-                "[execution]\nmax_decision_runs_per_day=3\n"
+                "[execution]\nmax_event_decision_runs_per_day=3\n"
+                "minimum_minutes_between_decisions=60\n"
                 'decision_windows=["09:45","13:00","15:30"]\n'
                 'order_type="market"\ntime_in_force="gfd"\n'
                 'market_hours="regular_hours"\n'
