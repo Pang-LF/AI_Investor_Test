@@ -80,6 +80,7 @@ def optimize_portfolio(
     portfolio: PortfolioSettings,
     risk: RiskSettings,
     sectors: Optional[Mapping[str, str]] = None,
+    current_weights: Optional[Mapping[str, float]] = None,
 ) -> TargetPortfolio:
     chosen = sorted(
         forecasts,
@@ -92,22 +93,44 @@ def optimize_portfolio(
     sector_groups = [
         (sectors or {}).get(symbol) or f"unknown:{symbol}" for symbol in symbols
     ]
-    covariance = shrinkage_covariance(symbols, histories, shrinkage=0.50)
-    expected_daily = [item.expected_excess_return_20d / 20.0 for item in chosen]
-    uncertainty_daily = [item.uncertainty_20d / math.sqrt(20.0) for item in chosen]
-    weights = [0.0] * len(chosen)
+    covariance_daily = shrinkage_covariance(symbols, histories, shrinkage=0.50)
+    covariance_20d = [
+        [20.0 * value for value in row] for row in covariance_daily
+    ]
+    expected_20d = [item.expected_excess_return_20d for item in chosen]
+    uncertainty_20d = [item.uncertainty_20d for item in chosen]
+    baseline = _project(
+        [max(0.0, (current_weights or {}).get(symbol, 0.0)) for symbol in symbols],
+        min(risk.max_position_fraction, portfolio.soft_max_position_fraction),
+        portfolio.max_invested_fraction,
+        sector_groups,
+        portfolio.soft_max_sector_fraction,
+    )
+    weights = baseline[:]
     for iteration in range(portfolio.optimizer_iterations):
         step = portfolio.optimizer_step_size / math.sqrt(iteration + 1.0)
         gradient = []
         for index in range(len(chosen)):
             risk_gradient = sum(
-                covariance[index][other] * weights[other]
+                covariance_20d[index][other] * weights[other]
                 for other in range(len(chosen))
             )
+            difference = weights[index] - baseline[index]
+            cost_gradient = (
+                portfolio.reallocation_cost_fraction
+                if difference > 1e-9
+                else -portfolio.reallocation_cost_fraction
+                if difference < -1e-9
+                else 0.0
+            )
             gradient.append(
-                expected_daily[index]
+                expected_20d[index]
                 - portfolio.risk_aversion * risk_gradient
-                - portfolio.uncertainty_penalty * uncertainty_daily[index] ** 2
+                - 2.0
+                * portfolio.uncertainty_penalty
+                * uncertainty_20d[index] ** 2
+                * weights[index]
+                - cost_gradient
             )
         weights = _project(
             [weight + step * value for weight, value in zip(weights, gradient)],
@@ -116,14 +139,31 @@ def optimize_portfolio(
             sector_groups,
             portfolio.soft_max_sector_fraction,
         )
-    variance = sum(
-        weights[left] * covariance[left][right] * weights[right]
-        for left in range(len(weights))
-        for right in range(len(weights))
-    )
-    objective = sum(a * b for a, b in zip(weights, expected_daily)) - (
-        0.5 * portfolio.risk_aversion * variance
-    )
+    def objective(values: Sequence[float], include_cost: bool) -> float:
+        variance = sum(
+            values[left] * covariance_20d[left][right] * values[right]
+            for left in range(len(values))
+            for right in range(len(values))
+        )
+        estimation_risk = sum(
+            (weight * uncertainty) ** 2
+            for weight, uncertainty in zip(values, uncertainty_20d)
+        )
+        turnover = sum(
+            abs(weight - old) for weight, old in zip(values, baseline)
+        )
+        return (
+            sum(a * b for a, b in zip(values, expected_20d))
+            - 0.5 * portfolio.risk_aversion * variance
+            - portfolio.uncertainty_penalty * estimation_risk
+            - (portfolio.reallocation_cost_fraction * turnover if include_cost else 0.0)
+        )
+
+    optimized_objective = objective(weights, include_cost=True)
+    baseline_objective = objective(baseline, include_cost=False)
+    if optimized_objective <= baseline_objective + 1e-9:
+        weights = baseline
+        optimized_objective = baseline_objective
     mapped = {
         symbol: round(weight, 8)
         for symbol, weight in zip(symbols, weights)
@@ -132,5 +172,5 @@ def optimize_portfolio(
     return TargetPortfolio(
         weights=mapped,
         cash_weight=round(max(0.0, 1.0 - sum(mapped.values())), 8),
-        objective_value=objective,
+        objective_value=optimized_objective,
     )

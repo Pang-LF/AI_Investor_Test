@@ -458,6 +458,9 @@ def execution_candidate_forecasts(
         > settings.execution_min_bias_adjusted_excess_return_20d
         and forecast.probability_positive_excess_20d
         >= settings.execution_min_calibrated_probability_positive
+        and forecast.expected_excess_return_20d
+        / max(forecast.uncertainty_20d, 1e-9)
+        >= settings.execution_min_edge_ratio_20d
     ]
 
 

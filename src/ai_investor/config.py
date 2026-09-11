@@ -171,6 +171,7 @@ class ForecastSettings:
     execution_calibration_approved: bool
     execution_min_calibrated_probability_positive: float
     execution_min_bias_adjusted_excess_return_20d: float
+    execution_min_edge_ratio_20d: float
     execution_min_calibration_date_blocks: int
     max_abs_forecast_20d: float
 
@@ -198,6 +199,9 @@ class ForecastSettings:
             execution_min_bias_adjusted_excess_return_20d=float(
                 raw["execution_min_bias_adjusted_excess_return_20d"]
             ),
+            execution_min_edge_ratio_20d=float(
+                raw["execution_min_edge_ratio_20d"]
+            ),
             execution_min_calibration_date_blocks=int(
                 raw["execution_min_calibration_date_blocks"]
             ),
@@ -217,6 +221,8 @@ class ForecastSettings:
             raise RuntimeError("Execution probability threshold must be in (0, 1)")
         if settings.execution_min_calibration_date_blocks < 5:
             raise RuntimeError("Execution calibration needs at least five non-overlapping blocks")
+        if settings.execution_min_edge_ratio_20d < 0:
+            raise RuntimeError("Execution edge-ratio threshold must be nonnegative")
         return settings
 
 
@@ -242,6 +248,7 @@ class PortfolioSettings:
     optimizer_iterations: int
     optimizer_step_size: float
     min_trade_usd: float
+    reallocation_cost_fraction: float
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "PortfolioSettings":
@@ -254,6 +261,7 @@ class PortfolioSettings:
             optimizer_iterations=int(raw["optimizer_iterations"]),
             optimizer_step_size=float(raw["optimizer_step_size"]),
             min_trade_usd=float(raw["min_trade_usd"]),
+            reallocation_cost_fraction=float(raw["reallocation_cost_fraction"]),
         )
         if not 0 < settings.max_invested_fraction <= 1:
             raise RuntimeError("max_invested_fraction must be in (0, 1]")
@@ -265,6 +273,8 @@ class PortfolioSettings:
             raise RuntimeError("Optimizer iteration count is too small")
         if settings.min_trade_usd < 1:
             raise RuntimeError("Minimum trade must be at least $1")
+        if not 0 <= settings.reallocation_cost_fraction <= 0.02:
+            raise RuntimeError("Reallocation cost must remain between 0% and 2%")
         return settings
 
 

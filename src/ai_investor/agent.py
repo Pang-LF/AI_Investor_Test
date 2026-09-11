@@ -339,8 +339,18 @@ def run_agent_cycle(
                 if item.get("symbol")
             }
             if settings.forecast.execution_calibration_approved:
+                current_weights = {
+                    position.symbol: position.market_value / state.portfolio_value
+                    for position in state.positions
+                    if state.portfolio_value > 0 and position.market_value > 0
+                }
                 target = optimize_portfolio(
-                    eligible, histories, settings.portfolio, settings.risk, sectors
+                    eligible,
+                    histories,
+                    settings.portfolio,
+                    settings.risk,
+                    sectors,
+                    current_weights=current_weights,
                 )
             else:
                 # Research-only calibration mode must never liquidate existing

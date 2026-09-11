@@ -36,7 +36,7 @@ Every 15 minutes during regular US market hours:
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.5.0.yaml`](strategies/agentic/strategy_v0.5.0.yaml).
+[`strategies/agentic/strategy_v0.5.1.yaml`](strategies/agentic/strategy_v0.5.1.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).

@@ -1,0 +1,78 @@
+strategy_id: agentic_single_account
+version: strategy_v0.5.1
+effective_date: 2026-09-11
+owner: system_and_user
+supersedes: strategy_v0.5.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan: {initial_usd: 1000, month_1_usd: 1000, month_2_usd: 1000}
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  active_observation_size: 60
+  context_only_etfs: 12
+  investment_stock_capacity: 48
+  target_mix: {large_cap: 15, mid_cap: 12, small_cap: 8, dynamic_event: 8, current_holding_reserve: 5}
+  stable_pool_uses_recent_alpha: false
+  small_cap:
+    market_cap_usd: [500000000, 2000000000]
+    minimum_price_usd: 5
+    minimum_20d_median_dollar_volume_usd: 20000000
+    minimum_float_ratio: 0.10
+    recent_reverse_split_detection: raw_vs_split_adjusted_history
+
+prediction:
+  model: pooled_beta_ridge_v0.3.0
+  history_calendar_days: 1095
+  horizons_days: [5, 20]
+  residual_definition: realized_minus_shrunk_prediction
+  overlap_control: one_cross_section_per_horizon_block
+  bias_correction: median_nonoverlapping_oos_residual
+  probability_calibration: empirical_nonoverlapping_oos_errors
+
+decision_funnel:
+  research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    maximum_new_names: 5
+    dynamic_event_bypass_for_research: true
+  execution:
+    calibration_approved: true
+    status: provisional_due_to_static_universe_selection_bias
+    bias_adjusted_excess_return_20d_minimum: 0.005
+    calibrated_probability_positive_minimum: 0.55
+    edge_ratio_minimum: 0.15
+    minimum_prior_nonoverlapping_blocks: 5
+    llm_veto_required_to_be_clear: true
+  portfolio:
+    horizon_days: 20
+    reallocation_cost_fraction: 0.004
+    must_improve_current_net_objective: true
+    cash_is_valid: true
+    strategy_soft_name_cap: 0.35
+    strategy_soft_sector_cap: 0.50
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-11
+    changed_by: user_and_system
+    reason: User requested immediate calibrated LIVE execution after reviewing the research-only gate.
+    changes:
+      - enabled_provisional_calibrated_execution
+      - added_0_15_edge_ratio_floor
+      - raised_calibrated_probability_floor_to_0_55
+      - added_0_40_percent_reallocation_cost
+      - corrected_optimizer_to_one_20_day_horizon
+      - required_net_portfolio_improvement_over_current_allocation

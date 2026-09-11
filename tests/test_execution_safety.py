@@ -228,7 +228,9 @@ class ExecutionSafetyTests(unittest.TestCase):
             forecasts.append(
                 AssetForecast(symbol, "2026-03-20", 0.04, 0.20, 0.8, 0.8, 0.01, 0.02, {})
             )
-        portfolio = PortfolioSettings(1.0, 0.35, 0.50, 1.0, 0.0, 100, 0.5, 10)
+        portfolio = PortfolioSettings(
+            1.0, 0.35, 0.50, 1.0, 0.0, 100, 0.5, 10, 0.004
+        )
         result = optimize_portfolio(
             forecasts, histories, portfolio, risk_settings(),
             {"AAA": "technology", "BBB": "technology"},
@@ -236,6 +238,24 @@ class ExecutionSafetyTests(unittest.TestCase):
         self.assertLessEqual(sum(result.weights.values()), 1.0 + 1e-9)
         self.assertTrue(all(value <= 0.35 for value in result.weights.values()))
         self.assertLessEqual(sum(result.weights.values()), 0.50 + 1e-9)
+
+    def test_optimizer_requires_improvement_after_reallocation_cost(self) -> None:
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bars = [
+            DailyBar("AAA", (base + timedelta(days=index)).isoformat(), 100, 101, 99,
+                     100 + index * 0.1, 1_000_000)
+            for index in range(80)
+        ]
+        forecast = AssetForecast(
+            "AAA", "2026-03-20", 0.0, 0.001, 0.5, 0.5, 0.05, 0.10, {}
+        )
+        portfolio = PortfolioSettings(
+            1.0, 0.35, 0.50, 1.0, 0.0, 100, 0.5, 10, 0.004
+        )
+        result = optimize_portfolio(
+            [forecast], {"AAA": bars}, portfolio, risk_settings()
+        )
+        self.assertEqual(result.weights, {})
 
     def test_shadow_execution_reviews_but_never_places(self) -> None:
         class FakeClient:

@@ -120,12 +120,13 @@ least 48%; Dynamic/Event names can enter research without passing that gate.
 This is permission to spend research cost, never permission to buy. Current
 holdings are added first so they receive explicit retain/exit review.
 
-Level 2 requires positive bias-adjusted alpha, calibrated probability, enough
-non-overlapping calibration blocks, and no LLM veto. The production calibration
-is currently **not approved**, so this layer returns no execution candidates and
-the program preserves any current holdings without creating orders. The 50%
-calibrated-probability value in configuration is only a provisional floor for a
-future reviewed activation, not a claimed optimal threshold.
+Level 2 requires at least 0.5% bias-adjusted 20-day alpha, 55% calibrated
+probability, a 0.15 expected-alpha/uncertainty ratio, at least five
+non-overlapping calibration blocks, and no LLM veto. These provisional thresholds
+were enabled on 2026-09-11 after a 22-block expanding walk-forward diagnostic.
+That diagnostic uses a static current universe and is therefore affected by
+survivorship and selection bias; the live ledger must replace it with prospective
+evidence. The thresholds are protective floors, not a proven optimal policy.
 
 Level 3, once enabled, makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
@@ -161,10 +162,13 @@ month. Ordinary monitor cycles use no LLM tokens.
 
 ## Portfolio construction
 
-Allowed names enter a long-only projected mean-variance optimizer. Expected
-20-day excess return is converted to a daily estimate. The covariance matrix
-uses recent aligned daily returns with 50% off-diagonal shrinkage. The objective
-rewards expected return and penalizes covariance risk and forecast uncertainty.
+Allowed names enter a long-only projected mean-variance optimizer expressed on
+one consistent 20-day horizon. The covariance matrix scales recent aligned daily
+returns to 20 days and uses 50% off-diagonal shrinkage. The objective rewards
+expected return and penalizes covariance risk, forecast uncertainty, and 0.40%
+estimated round-trip reallocation cost. Optimization starts from current weights;
+if the new portfolio's net objective does not exceed the current portfolio's,
+the current allocation is retained.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy
 soft cap per name, a 50% strategy soft cap per known sector, and at most 100%
