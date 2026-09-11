@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .config import MonitorSettings
 from .robinhood_mcp import MCPError, RobinhoodReadOnlyMCPClient
@@ -14,6 +15,8 @@ class UniverseEntry:
     bucket: str
     score: float = 0.0
     sector: str = ""
+    investable: bool = True
+    issuer: str = ""
 
 
 @dataclass(frozen=True)
@@ -96,36 +99,47 @@ def _common_columns() -> List[Dict[str, Any]]:
     ]
 
 
-def _core_rows(
-    client: RobinhoodReadOnlyMCPClient, settings: MonitorSettings
+def _size_rows(
+    client: RobinhoodReadOnlyMCPClient,
+    *,
+    minimum_market_cap: int,
+    maximum_market_cap: Optional[int],
+    minimum_price: float,
+    minimum_average_volume: int,
 ) -> List[Dict[str, Any]]:
+    market_cap_filter = {
+        "filter_type": "FILTER_TYPE_MARKET_CAP",
+        "predicate": "BETWEEN" if maximum_market_cap is not None else ">=",
+        "values": (
+            [str(minimum_market_cap), str(maximum_market_cap - 1)]
+            if maximum_market_cap is not None
+            else [str(minimum_market_cap)]
+        ),
+    }
+    filters: List[Dict[str, Any]] = [
+        {
+            "filter_type": "FILTER_TYPE_INSTRUMENT_TYPE",
+            "predicate": "=",
+            "values": ["STOCK"],
+        },
+        market_cap_filter,
+        {
+            "filter_type": "FILTER_TYPE_LAST",
+            "predicate": ">=",
+            "values": [str(minimum_price)],
+        },
+        {
+            "filter_type": "FILTER_TYPE_AVERAGE_VOLUME",
+            "predicate": ">=",
+            "values": [str(minimum_average_volume)],
+            "interval": "1d",
+            "length": 30,
+        },
+    ]
     payload = client.call_tool(
         "preview_scan",
         {
-            "filters": [
-                {
-                    "filter_type": "FILTER_TYPE_INSTRUMENT_TYPE",
-                    "predicate": "=",
-                    "values": ["STOCK"],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_MARKET_CAP",
-                    "predicate": ">=",
-                    "values": [str(settings.core_min_market_cap)],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_LAST",
-                    "predicate": ">=",
-                    "values": [str(settings.core_min_price)],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_AVERAGE_VOLUME",
-                    "predicate": ">=",
-                    "values": [str(settings.core_min_average_volume)],
-                    "interval": "1d",
-                    "length": 30,
-                },
-            ],
+            "filters": filters,
             "columns": _common_columns(),
         },
     )
@@ -153,7 +167,7 @@ def _event_rows(
                 {
                     "filter_type": "FILTER_TYPE_LAST",
                     "predicate": ">=",
-                    "values": [str(settings.core_min_price)],
+                    "values": [str(settings.small_min_price)],
                 },
                 {
                     "filter_type": "FILTER_TYPE_AVERAGE_VOLUME",
@@ -200,6 +214,7 @@ def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "symbol": str(row.get("ticker", "")).upper(),
         "sector": str(columns.get("Sector", "")),
+        "issuer": str(columns.get("Name", "")),
         "last": last,
         "average_volume": average_volume,
         "dollar_volume": last * average_volume,
@@ -223,7 +238,9 @@ def _percentile(values: Sequence[float], value: float) -> float:
 
 
 def _rank_core(
-    rows: Iterable[Dict[str, Any]], min_dollar_volume: float
+    rows: Iterable[Dict[str, Any]],
+    min_dollar_volume: float,
+    bucket: str = "core",
 ) -> List[UniverseEntry]:
     metrics = [
         metric
@@ -231,25 +248,19 @@ def _rank_core(
         if metric["symbol"] and metric["dollar_volume"] >= min_dollar_volume
     ]
     liquidities = [math.log1p(metric["dollar_volume"]) for metric in metrics]
-    sizes = [math.log1p(metric["market_cap"]) for metric in metrics]
     ranked = []
     for metric in metrics:
         liquidity = _percentile(liquidities, math.log1p(metric["dollar_volume"]))
-        size = _percentile(sizes, math.log1p(metric["market_cap"]))
-        # Core membership is an observation decision, not an alpha signal.
-        # Recent returns belong in the event/signal layer and must not affect
-        # whether a stable, liquid company stays in the core pool.
-        score = (
-            0.50 * liquidity
-            + 0.30 * size
-            + 0.20 * metric["completeness"]
-        )
+        # Size is controlled by explicit buckets, so ranking within a bucket
+        # rewards execution quality rather than simply choosing its largest names.
+        score = 0.75 * liquidity + 0.25 * metric["completeness"]
         ranked.append(
             UniverseEntry(
                 symbol=metric["symbol"],
-                bucket="core",
+                bucket=bucket,
                 score=round(score, 8),
                 sector=metric["sector"],
+                issuer=metric["issuer"],
             )
         )
     return sorted(ranked, key=lambda entry: (-entry.score, entry.symbol))
@@ -272,9 +283,36 @@ def _rank_events(rows: Iterable[Dict[str, Any]]) -> List[UniverseEntry]:
                 bucket="event",
                 score=round(score, 8),
                 sector=metric["sector"],
+                issuer=metric["issuer"],
             )
         )
     return sorted(ranked, key=lambda entry: (-entry.score, entry.symbol))
+
+
+ISSUER_ALIASES = {
+    "GOOG": "ALPHABET",
+    "GOOGL": "ALPHABET",
+    "FOX": "FOX_CORP",
+    "FOXA": "FOX_CORP",
+    "NWS": "NEWS_CORP",
+    "NWSA": "NEWS_CORP",
+    "UA": "UNDER_ARMOUR",
+    "UAA": "UNDER_ARMOUR",
+    "BRK.A": "BERKSHIRE_HATHAWAY",
+    "BRK.B": "BERKSHIRE_HATHAWAY",
+}
+
+
+def _issuer_key(symbol: str, issuer: str = "") -> str:
+    symbol_key = symbol.upper()
+    if symbol_key in ISSUER_ALIASES:
+        return ISSUER_ALIASES[symbol_key]
+    cleaned = re.sub(
+        r"\s+(CLASS\s+[A-Z]|COMMON STOCK|ORDINARY SHARES?)$",
+        "",
+        issuer.upper().strip(),
+    )
+    return cleaned or symbol_key
 
 
 def _take_with_sector_cap(
@@ -282,29 +320,83 @@ def _take_with_sector_cap(
     limit: int,
     excluded: Set[str],
     sector_cap: int,
+    issuer_excluded: Optional[Set[str]] = None,
+    global_sector_counts: Optional[Dict[str, int]] = None,
+    global_sector_cap: int = 5,
 ) -> List[UniverseEntry]:
     selected: List[UniverseEntry] = []
     sector_counts: Dict[str, int] = {}
+    issuers = issuer_excluded if issuer_excluded is not None else set()
+    global_counts = global_sector_counts if global_sector_counts is not None else {}
     for candidate in candidates:
         if candidate.symbol in excluded:
+            continue
+        issuer = _issuer_key(candidate.symbol, candidate.issuer)
+        if issuer in issuers:
             continue
         sector = candidate.sector or "unknown"
         if sector_counts.get(sector, 0) >= sector_cap:
             continue
+        if global_counts.get(sector, 0) >= global_sector_cap:
+            continue
         selected.append(candidate)
         excluded.add(candidate.symbol)
+        issuers.add(issuer)
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
+        global_counts[sector] = global_counts.get(sector, 0) + 1
         if len(selected) >= limit:
             break
     return selected
 
 
-def scan_core_candidates(
+def scan_large_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
 ) -> List[UniverseEntry]:
     return _rank_core(
-        _core_rows(client, settings), settings.core_min_average_dollar_volume
+        _size_rows(
+            client,
+            minimum_market_cap=settings.large_min_market_cap,
+            maximum_market_cap=None,
+            minimum_price=settings.large_min_price,
+            minimum_average_volume=settings.large_min_average_volume,
+        ),
+        settings.large_min_average_dollar_volume,
+        "large",
+    )
+
+
+def scan_mid_candidates(
+    client: RobinhoodReadOnlyMCPClient,
+    settings: MonitorSettings,
+) -> List[UniverseEntry]:
+    return _rank_core(
+        _size_rows(
+            client,
+            minimum_market_cap=settings.mid_min_market_cap,
+            maximum_market_cap=settings.mid_max_market_cap,
+            minimum_price=settings.mid_min_price,
+            minimum_average_volume=settings.mid_min_average_volume,
+        ),
+        settings.mid_min_average_dollar_volume,
+        "mid",
+    )
+
+
+def scan_small_candidates(
+    client: RobinhoodReadOnlyMCPClient,
+    settings: MonitorSettings,
+) -> List[UniverseEntry]:
+    return _rank_core(
+        _size_rows(
+            client,
+            minimum_market_cap=settings.small_min_market_cap,
+            maximum_market_cap=settings.small_max_market_cap,
+            minimum_price=settings.small_min_price,
+            minimum_average_volume=settings.small_min_average_volume,
+        ),
+        settings.small_min_average_dollar_volume,
+        "small",
     )
 
 
@@ -318,46 +410,110 @@ def scan_event_candidates(
 def assemble_universe(
     settings: MonitorSettings,
     position_symbols: Sequence[str],
-    core_candidates: Sequence[UniverseEntry],
+    large_candidates: Sequence[UniverseEntry],
+    mid_candidates: Sequence[UniverseEntry],
+    small_candidates: Sequence[UniverseEntry],
     event_candidates: Sequence[UniverseEntry],
 ) -> List[UniverseEntry]:
-    positions = [
-        UniverseEntry(symbol=symbol, bucket="position")
-        for symbol in position_symbols
-    ]
+    candidate_context = {
+        entry.symbol: entry
+        for candidates in (
+            large_candidates,
+            mid_candidates,
+            small_candidates,
+            event_candidates,
+        )
+        for entry in candidates
+    }
+    positions = []
+    for symbol in position_symbols:
+        context = candidate_context.get(symbol)
+        positions.append(
+            UniverseEntry(
+                symbol=symbol,
+                bucket="position",
+                sector=context.sector if context else "",
+                issuer=context.issuer if context else "",
+            )
+        )
     if len(positions) > settings.position_reserve:
         raise MCPError("Position count exceeds the configured reserve")
 
     excluded = {entry.symbol for entry in positions}
+    issuer_excluded = {
+        _issuer_key(entry.symbol, entry.issuer) for entry in positions
+    }
+    global_sector_counts: Dict[str, int] = {}
+    for entry in positions:
+        if entry.sector:
+            global_sector_counts[entry.sector] = (
+                global_sector_counts.get(entry.sector, 0) + 1
+            )
     fixed = []
     for symbol in settings.fixed_etfs:
         if symbol not in excluded:
-            fixed.append(UniverseEntry(symbol=symbol, bucket="fixed_etf"))
+            fixed.append(
+                UniverseEntry(symbol=symbol, bucket="fixed_etf", investable=False)
+            )
             excluded.add(symbol)
 
-    core = _take_with_sector_cap(
-        core_candidates,
-        settings.core_target,
-        excluded,
-        sector_cap=5,
-    )
+    # Opportunity buckets receive slots before large caps so mega-cap names
+    # cannot consume the global sector allowance by themselves.
     events = _take_with_sector_cap(
         event_candidates,
         settings.event_target,
         excluded,
+        sector_cap=2,
+        issuer_excluded=issuer_excluded,
+        global_sector_counts=global_sector_counts,
+    )
+    small = _take_with_sector_cap(
+        small_candidates,
+        settings.small_target,
+        excluded,
+        sector_cap=2,
+        issuer_excluded=issuer_excluded,
+        global_sector_counts=global_sector_counts,
+    )
+    mid = _take_with_sector_cap(
+        mid_candidates,
+        settings.mid_target,
+        excluded,
         sector_cap=3,
+        issuer_excluded=issuer_excluded,
+        global_sector_counts=global_sector_counts,
+    )
+    large = _take_with_sector_cap(
+        large_candidates,
+        settings.large_target,
+        excluded,
+        sector_cap=5,
+        issuer_excluded=issuer_excluded,
+        global_sector_counts=global_sector_counts,
     )
 
-    entries = positions + fixed + core + events
-    # Unused position reserve and quiet event periods are filled from the core
-    # ranking while preserving uniqueness. This keeps every quote cycle at 60.
-    for candidate in core_candidates:
-        if len(entries) >= settings.universe_size:
+    entries = positions + fixed + large + mid + small + events
+    # Fill unused position slots in round-robin bucket order. Fills retain the
+    # same issuer and global-sector constraints as target allocation.
+    fill_pools = (mid_candidates, small_candidates, event_candidates, large_candidates)
+    while len(entries) < settings.universe_size:
+        added = False
+        for candidates in fill_pools:
+            picked = _take_with_sector_cap(
+                candidates,
+                1,
+                excluded,
+                sector_cap=5,
+                issuer_excluded=issuer_excluded,
+                global_sector_counts=global_sector_counts,
+            )
+            if picked:
+                entries.extend(picked)
+                added = True
+            if len(entries) >= settings.universe_size:
+                break
+        if not added:
             break
-        if candidate.symbol in excluded:
-            continue
-        entries.append(candidate)
-        excluded.add(candidate.symbol)
     if len(entries) != settings.universe_size:
         raise MCPError(
             f"Universe construction produced {len(entries)} symbols, expected "
@@ -374,7 +530,9 @@ def build_universe(
     return assemble_universe(
         settings,
         position_symbols,
-        scan_core_candidates(client, settings),
+        scan_large_candidates(client, settings),
+        scan_mid_candidates(client, settings),
+        scan_small_candidates(client, settings),
         scan_event_candidates(client, settings),
     )
 

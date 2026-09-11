@@ -162,7 +162,18 @@ def run_agent_cycle(
                     portfolio_value=state.portfolio_value, cash=state.cash, payload=payload,
                 )
                 return AgentResult(status="insufficient_benchmark_history", run_id=run_id, decision_key=decision_key, detail=",".join(missing_history))
-            forecasts, models = forecast_assets(histories, settings.forecast)
+            investable_symbols = {
+                str(item.get("symbol", "")).upper()
+                for item in entries
+                if item.get("investable", True)
+            }
+            investable_symbols.update(position.symbol for position in state.positions)
+            forecast_histories = {
+                symbol: bars
+                for symbol, bars in histories.items()
+                if symbol == "SPY" or symbol in investable_symbols
+            }
+            forecasts, models = forecast_assets(forecast_histories, settings.forecast)
             candidates = candidate_forecasts(forecasts, settings.forecast)
             timings["history_and_forecast_seconds"] = round(
                 time.monotonic() - forecast_started, 3
@@ -189,7 +200,7 @@ def run_agent_cycle(
                     portfolio_value=state.portfolio_value, cash=state.cash, payload=payload,
                 )
                 return AgentResult(status="no_quantitative_opportunity", run_id=run_id, decision_key=decision_key)
-            regime = infer_market_regime(histories)
+            regime = infer_market_regime(forecast_histories)
             try:
                 email_config = (
                     require_email_configuration()
@@ -272,7 +283,14 @@ def run_agent_cycle(
             timings["llm_seconds"] = round(research.latency_seconds, 3)
             allowed = allowed_symbols(research)
             eligible = [item for item in research_set if item.symbol in allowed]
-            target = optimize_portfolio(eligible, histories, settings.portfolio, settings.risk)
+            sectors = {
+                str(item.get("symbol", "")).upper(): str(item.get("sector", ""))
+                for item in entries
+                if item.get("symbol")
+            }
+            target = optimize_portfolio(
+                eligible, histories, settings.portfolio, settings.risk, sectors
+            )
             monitor_quotes = _quote_map(monitor_payload)
             prices = {symbol: float(item.get("last_trade_price") or 0) for symbol, item in monitor_quotes.items()}
             orders = plan_orders(
@@ -296,7 +314,7 @@ def run_agent_cycle(
                 allowed_buy_symbols={
                     str(item.get("symbol", "")).upper()
                     for item in entries
-                    if item.get("bucket") != "position"
+                    if item.get("investable", True)
                 },
                 decision_started_at=current,
                 reference_prices=prices,

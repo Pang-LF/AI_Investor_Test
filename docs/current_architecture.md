@@ -27,22 +27,29 @@ The top-level sequence is:
 
 The universe contains 60 unique symbols:
 
-- 12 fixed ETFs: SPY, QQQ, IWM, RSP and eight sector ETFs.
-- 33 stable core slots.
-- 10 event slots.
-- Up to 5 current-position reserve slots. Unused reserve slots are filled from
-  the core list.
+- 12 context-only ETFs: SPY, QQQ, IWM, RSP and eight sector ETFs. They inform
+  the market snapshot and LLM context but do not become new buy candidates.
+- 13 target large-cap slots above $10 billion.
+- 10 target mid-cap slots between $2 billion and $10 billion.
+- 7 target smaller-company slots between $500 million and $2 billion.
+- 8 event slots above $500 million.
+- Up to 10 current-position reserve slots. Unused reserve slots are filled
+  round-robin across size/event buckets.
 
-The core scan requests US stocks with price at least $10, market cap at least
-$5 billion, 30-day average volume at least 1 million, and average dollar volume
-at least $100 million. Ranking is 50% liquidity percentile, 30% market-cap
-percentile, and 20% data completeness. Recent return is explicitly excluded, so
-universe construction is not an alpha signal.
+Large, mid, and small pools have minimum average dollar volume of $100 million,
+$30 million, and $20 million respectively. Ranking within each explicit size
+bucket is 75% liquidity and 25% data completeness; larger market cap does not
+improve rank inside a bucket.
 
-The event scan requests stocks with market cap at least $1 billion, average
+The event scan requests stocks with market cap at least $500 million, average
 volume at least 500,000, relative volume at least 1.25, and absolute daily move
 at least 2%. Event ranking uses absolute move, relative volume, and log dollar
 volume. These names are observations, not automatic buys.
+
+Every selection and fill path shares a maximum of five stocks per sector and
+deduplicates multiple share classes of the same issuer. Context ETFs do not
+consume these stock-sector limits. If the constrained pools cannot provide 60
+unique names, the cycle fails instead of silently relaxing a control.
 
 Robinhood quotes are fetched in exactly three batches of 20. For every symbol the
 monitor stores the last regular-hours trade and time, bid, ask, adjusted previous
@@ -66,7 +73,9 @@ the current incomplete trading day. A symbol needs at least 100 aligned daily
 bars; SPY is the benchmark. Short-history names are excluded without blocking
 the other symbols.
 
-The pooled ridge model uses five transparent features:
+The pooled ridge model uses five transparent features. Each price-return feature
+first removes market exposure using beta estimated from the preceding 60 daily
+returns:
 
 1. 20-day return relative to SPY.
 2. 60-day return relative to SPY.
@@ -74,11 +83,16 @@ The pooled ridge model uses five transparent features:
 4. 1-day residual return, representing a price event.
 5. Current volume relative to its trailing 20-day mean.
 
-Separate models predict 5- and 20-day excess return over SPY. Samples are split
-by date for validation, not randomly. Ridge regularization reduces unstable
-coefficients. Forecasts are shrunk 65% by multiplying raw values by 0.35, then
-capped at +/-4% for 5 days and +/-8% for 20 days. Validation error is
-used to calculate an approximate probability of positive excess return.
+The estimated 60-day beta is also logged and supplied to the LLM as context,
+although it is not an additional ridge coefficient.
+
+Separate models predict 5- and 20-day beta-adjusted return. Samples are split by
+date, not randomly, with a horizon-length purge between training and validation
+so overlapping forward labels do not cross the boundary. Ridge regularization
+reduces unstable coefficients. Forecasts are shrunk 65% by multiplying raw
+values by 0.35, then capped at +/-4% for 5 days and +/-8% for 20 days. Positive
+return probability comes from the held-out empirical error distribution rather
+than an assumed normal distribution.
 
 A new candidate must have expected 20-day excess return of at least 0.5% and at
 least 55% probability of outperforming SPY. Up to ten names proceed to research
@@ -117,10 +131,13 @@ Allowed names enter a long-only projected mean-variance optimizer. Expected
 uses recent aligned daily returns with 50% off-diagonal shrinkage. The objective
 rewards expected return and penalizes covariance risk and forecast uncertainty.
 
-Every optimization step projects weights to nonnegative values, the configured
-single-name cap, and at most 100% total investment. Cash is the residual and can
-remain 100%. No-trade is a valid result. Target weights are compared with current
-market values; changes below $10 are ignored, and sells are planned before buys.
+Every optimization step projects weights to nonnegative values, a 35% strategy
+soft cap per name, a 50% strategy soft cap per known sector, and at most 100%
+total investment. The independent hard single-name limit remains 100%; the
+strategy therefore normally diversifies without changing the user-selected
+absolute boundary. Cash is the residual and can remain 100%.
+No-trade is valid. Target weights are compared with current market values;
+changes below $10 are ignored, and sells are planned before buys.
 
 ## Hard risk and execution
 
@@ -176,9 +193,11 @@ The 600-second age,
 the situation has materially changed. Email happens after execution.
 
 The current forecast is a daily-bar cross-sectional model, not a proven intraday
-trading edge. Intraday prices and volume select when to investigate, while the
+trading edge. Intraday prices select when to investigate, while the
 numeric alpha model mainly uses completed daily information. The system has not
-yet accumulated forward live performance, and it remains exposed to selection
-bias, regime change, corporate actions, model error, market-order slippage,
-halts, API changes, and gap risk. The $100,000 objective does not make any trade
-more likely and cannot be guaranteed.
+yet accumulated forward live performance. Point-in-time fundamentals, SEC filing
+features, analyst revisions, 15-minute OHLCV/VWAP, sector-neutral residuals,
+transaction-cost-aware optimization, and ETF look-through exposure are not yet
+implemented. It remains exposed to selection bias, regime change, corporate
+actions, model error, market-order slippage, halts, API changes, and gap risk.
+The $100,000 objective does not make any trade more likely and cannot be guaranteed.

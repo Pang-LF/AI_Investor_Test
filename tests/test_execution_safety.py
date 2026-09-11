@@ -3,11 +3,13 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from ai_investor.config import PortfolioSettings, RiskSettings
 from ai_investor.execution import (
     BrokerState,
     Position,
+    arm_live,
     assert_live_armed,
     deterministic_ref_id,
     plan_orders,
@@ -144,6 +146,27 @@ class ExecutionSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "kill switch"):
                 assert_live_armed(FakeSettings(), Path(directory), "x", "2026-01-01")
 
+    def test_live_arm_is_bound_to_strategy_and_risk_versions(self) -> None:
+        trading_date = datetime.now().date().isoformat()
+        settings = SimpleNamespace(
+            mode="LIVE",
+            live_trading=True,
+            strategy_version="strategy_v1",
+            risk=SimpleNamespace(policy_version="risk_v1"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_live(root, "account", trading_date, "strategy_v1", "risk_v1")
+            assert_live_armed(settings, root, "account", trading_date)
+            changed = SimpleNamespace(
+                mode="LIVE",
+                live_trading=True,
+                strategy_version="strategy_v2",
+                risk=SimpleNamespace(policy_version="risk_v1"),
+            )
+            with self.assertRaisesRegex(RuntimeError, "strategy version"):
+                assert_live_armed(changed, root, "account", trading_date)
+
     def test_ledger_order_upsert_preserves_one_row(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with Ledger(Path(directory) / "ledger.sqlite") as ledger:
@@ -171,10 +194,14 @@ class ExecutionSafetyTests(unittest.TestCase):
             forecasts.append(
                 AssetForecast(symbol, "2026-03-20", 0.04, 0.20, 0.8, 0.8, 0.01, 0.02, {})
             )
-        portfolio = PortfolioSettings(1.0, 1.0, 0.0, 100, 0.5, 10)
-        result = optimize_portfolio(forecasts, histories, portfolio, risk_settings())
+        portfolio = PortfolioSettings(1.0, 0.35, 0.50, 1.0, 0.0, 100, 0.5, 10)
+        result = optimize_portfolio(
+            forecasts, histories, portfolio, risk_settings(),
+            {"AAA": "technology", "BBB": "technology"},
+        )
         self.assertLessEqual(sum(result.weights.values()), 1.0 + 1e-9)
-        self.assertTrue(all(value <= 1.0 for value in result.weights.values()))
+        self.assertTrue(all(value <= 0.35 for value in result.weights.values()))
+        self.assertLessEqual(sum(result.weights.values()), 0.50 + 1e-9)
 
     def test_shadow_execution_reviews_but_never_places(self) -> None:
         class FakeClient:

@@ -1,0 +1,84 @@
+strategy_id: agentic_single_account
+version: strategy_v0.4.0
+effective_date: 2026-09-11
+owner: system_and_user
+supersedes: strategy_v0.3.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan:
+    initial_usd: 1000
+    month_1_usd: 1000
+    month_2_usd: 1000
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  universe_size: 60
+  context_only_etfs: 12
+  size_buckets:
+    large:
+      target: 13
+      minimum_market_cap_usd: 10000000000
+      minimum_average_dollar_volume_usd: 100000000
+    mid:
+      target: 10
+      market_cap_usd: [2000000000, 10000000000]
+      minimum_average_dollar_volume_usd: 30000000
+    small:
+      target: 7
+      market_cap_usd: [500000000, 2000000000]
+      minimum_average_dollar_volume_usd: 20000000
+    event:
+      target: 8
+      minimum_market_cap_usd: 500000000
+  position_reserve: 10
+  global_sector_stock_cap: 5
+  issuer_deduplication: true
+  fill_preserves_sector_and_issuer_controls: true
+
+prediction:
+  model: pooled_beta_ridge_v0.2.0
+  horizons_days: [5, 20]
+  market_adjustment: rolling_60_day_beta
+  validation: purged_temporal_split
+  purge_days_by_horizon: true
+  probability: empirical_validation_error_distribution
+  maximum_candidates: 10
+
+portfolio:
+  long_only: true
+  hard_max_position_fraction: 1.0
+  strategy_soft_max_position_fraction: 0.35
+  strategy_soft_max_sector_fraction: 0.50
+  maximum_invested_fraction: 1.0
+  cash_is_valid: true
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  reasoning_effort: low
+  maximum_names: 10
+  earnings_and_news_names: 5
+  maximum_calls_per_decision: 1
+  request_timeout_seconds: 480
+
+change_log:
+  - changed_at: 2026-09-10
+    changed_by: user_and_system
+    reason: Reduce mega-cap concentration while preserving execution quality.
+    changes:
+      - replaced_single_core_pool_with_large_mid_small_event_buckets
+      - lowered_minimum_event_market_cap_to_500_million_usd
+      - made_fixed_etfs_context_only_for_new_buys
+      - applied_global_sector_cap_to_all_fill_paths
+      - added_issuer_deduplication
+      - aligned_position_reserve_with_ten_position_hard_limit
+  - changed_at: 2026-09-10
+    changed_by: user_and_system
+    reason: Correct market exposure and validation weaknesses.
+    changes:
+      - replaced_simple_spy_subtraction_with_rolling_beta_adjustment
+      - added_horizon_specific_purge_between_train_and_validation
+      - replaced_normal_probability_assumption_with_empirical_validation_errors
+      - added_35_percent_strategy_soft_position_cap

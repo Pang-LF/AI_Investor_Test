@@ -59,7 +59,13 @@ def account_fingerprint(account_number: str) -> str:
     return hashlib.sha256(account_number.encode("utf-8")).hexdigest()
 
 
-def arm_live(root: Path, account_number: str, trading_date: str) -> Path:
+def arm_live(
+    root: Path,
+    account_number: str,
+    trading_date: str,
+    strategy_version: str,
+    risk_policy_version: str,
+) -> Path:
     requested = date.fromisoformat(trading_date)
     today = date.today()
     if requested not in {today, today + timedelta(days=1)}:
@@ -70,9 +76,11 @@ def arm_live(root: Path, account_number: str, trading_date: str) -> Path:
     temporary.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "trading_date": trading_date,
                 "account_fingerprint": account_fingerprint(account_number),
+                "strategy_version": strategy_version,
+                "risk_policy_version": risk_policy_version,
                 "armed_at": datetime.now(timezone.utc).isoformat(),
             },
             separators=(",", ":"),
@@ -95,6 +103,10 @@ def assert_live_armed(settings: Settings, root: Path, account_number: str, tradi
         raise RuntimeError("Daily live arm has expired")
     if payload.get("account_fingerprint") != account_fingerprint(account_number):
         raise RuntimeError("Live arm does not match the selected account")
+    if payload.get("strategy_version") != settings.strategy_version:
+        raise RuntimeError("Live arm does not match the active strategy version")
+    if payload.get("risk_policy_version") != settings.risk.policy_version:
+        raise RuntimeError("Live arm does not match the active risk policy version")
 
 
 def deterministic_ref_id(decision_key: str, symbol: str, side: str, value: float) -> str:

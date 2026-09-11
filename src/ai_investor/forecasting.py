@@ -26,6 +26,7 @@ class RidgeModel:
     feature_means: Tuple[float, ...]
     feature_scales: Tuple[float, ...]
     residual_std: float
+    validation_errors: Tuple[float, ...]
     training_samples: int
     validation_samples: int
 
@@ -53,7 +54,7 @@ class AssetForecast:
     uncertainty_5d: float
     uncertainty_20d: float
     signals: Dict[str, float]
-    model_version: str = "pooled_ridge_v0.1.0"
+    model_version: str = "pooled_beta_ridge_v0.2.0"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -77,16 +78,61 @@ def _return(values: Sequence[float], end: int, lookback: int) -> float:
     return values[end] / values[end - lookback] - 1.0
 
 
+def _rolling_beta(
+    values: Sequence[float], benchmark: Sequence[float], end: int, lookback: int = 60
+) -> float:
+    start = max(1, end - lookback + 1)
+    asset_returns = [
+        values[index] / values[index - 1] - 1.0
+        for index in range(start, end + 1)
+        if values[index - 1] > 0 and benchmark[index - 1] > 0
+    ]
+    benchmark_returns = [
+        benchmark[index] / benchmark[index - 1] - 1.0
+        for index in range(start, end + 1)
+        if values[index - 1] > 0 and benchmark[index - 1] > 0
+    ]
+    if len(asset_returns) < 20:
+        return 1.0
+    market_mean = fmean(benchmark_returns)
+    asset_mean = fmean(asset_returns)
+    market_variance = fmean(
+        (value - market_mean) ** 2 for value in benchmark_returns
+    )
+    if market_variance <= 1e-12:
+        return 1.0
+    covariance = fmean(
+        (asset - asset_mean) * (market - market_mean)
+        for asset, market in zip(asset_returns, benchmark_returns)
+    )
+    return max(-1.0, min(covariance / market_variance, 3.0))
+
+
+def _beta_adjusted_return(
+    values: Sequence[float], benchmark: Sequence[float], end: int, lookback: int
+) -> float:
+    beta = _rolling_beta(values, benchmark, end)
+    start = end - lookback + 1
+    if start < 1:
+        return 0.0
+    return sum(
+        values[index] / values[index - 1]
+        - 1.0
+        - beta * (benchmark[index] / benchmark[index - 1] - 1.0)
+        for index in range(start, end + 1)
+    )
+
+
 def _features(
     closes: Sequence[float],
     volumes: Sequence[float],
     benchmark: Sequence[float],
     index: int,
 ) -> Tuple[float, ...]:
-    residual_20 = _return(closes, index, 20) - _return(benchmark, index, 20)
-    residual_60 = _return(closes, index, 60) - _return(benchmark, index, 60)
-    residual_5 = _return(closes, index, 5) - _return(benchmark, index, 5)
-    residual_1 = _return(closes, index, 1) - _return(benchmark, index, 1)
+    residual_20 = _beta_adjusted_return(closes, benchmark, index, 20)
+    residual_60 = _beta_adjusted_return(closes, benchmark, index, 60)
+    residual_5 = _beta_adjusted_return(closes, benchmark, index, 5)
+    residual_1 = _beta_adjusted_return(closes, benchmark, index, 1)
     average_volume = fmean(volumes[index - 20 : index]) if index >= 20 else 0.0
     volume_acceleration = (
         volumes[index] / average_volume - 1.0 if average_volume > 0 else 0.0
@@ -186,21 +232,24 @@ def fit_ridge_model(
     horizon: int,
     penalty: float,
     minimum_samples: int,
+    shrinkage: float = 1.0,
 ) -> RidgeModel:
     if len(samples) < minimum_samples:
         raise ValueError(
             f"Insufficient training samples for {horizon}d model: {len(samples)}"
         )
     dates = sorted({sample[0] for sample in samples})
-    split_date = dates[max(1, int(len(dates) * 0.80)) - 1]
-    train = [sample for sample in samples if sample[0] <= split_date]
-    validation = [sample for sample in samples if sample[0] > split_date]
+    split_index = max(1, int(len(dates) * 0.80))
+    validation_start = dates[min(split_index, len(dates) - 1)]
+    train_end_index = max(0, split_index - horizon)
+    train_end = dates[train_end_index]
+    train = [sample for sample in samples if sample[0] < train_end]
+    validation = [sample for sample in samples if sample[0] >= validation_start]
     if len(train) < minimum_samples // 2 or not validation:
-        train = list(samples)
-        validation = list(samples[-max(1, len(samples) // 5) :])
+        raise ValueError("Insufficient samples after purged temporal split")
     validation_core = _fit_core(train, penalty)
     errors = [
-        sample[2] - _predict_components(validation_core, sample[1])
+        sample[2] - shrinkage * _predict_components(validation_core, sample[1])
         for sample in validation
     ]
     residual_std = max(
@@ -214,6 +263,7 @@ def fit_ridge_model(
         feature_means=final[2],
         feature_scales=final[3],
         residual_std=residual_std,
+        validation_errors=tuple(errors),
         training_samples=len(samples),
         validation_samples=len(validation),
     )
@@ -230,17 +280,29 @@ def build_training_samples(
         dates, closes, volumes, benchmark_closes = _aligned_series(bars, benchmark)
         for index in range(60, len(dates) - horizon):
             features = _features(closes, volumes, benchmark_closes, index)
-            target = (
-                closes[index + horizon] / closes[index] - 1.0
-                - (benchmark_closes[index + horizon] / benchmark_closes[index] - 1.0)
+            beta = _rolling_beta(closes, benchmark_closes, index)
+            target = sum(
+                closes[future] / closes[future - 1]
+                - 1.0
+                - beta
+                * (
+                    benchmark_closes[future] / benchmark_closes[future - 1]
+                    - 1.0
+                )
+                for future in range(index + 1, index + horizon + 1)
             )
             if all(math.isfinite(value) for value in features) and math.isfinite(target):
                 samples.append((dates[index], features, target))
     return sorted(samples, key=lambda sample: (sample[0], sample[1]))
 
 
-def _normal_cdf(value: float) -> float:
-    return 0.5 * (1.0 + math.erf(value / math.sqrt(2.0)))
+def _empirical_positive_probability(
+    prediction: float, validation_errors: Sequence[float]
+) -> float:
+    if not validation_errors:
+        return 0.5
+    successes = sum(prediction + error > 0 for error in validation_errors)
+    return (successes + 1.0) / (len(validation_errors) + 2.0)
 
 
 def forecast_assets(
@@ -250,10 +312,12 @@ def forecast_assets(
     samples_20 = build_training_samples(histories, 20)
     models = {
         "5d": fit_ridge_model(
-            samples_5, 5, settings.ridge_penalty, settings.min_training_samples
+            samples_5, 5, settings.ridge_penalty, settings.min_training_samples,
+            settings.shrinkage,
         ),
         "20d": fit_ridge_model(
-            samples_20, 20, settings.ridge_penalty, settings.min_training_samples
+            samples_20, 20, settings.ridge_penalty, settings.min_training_samples,
+            settings.shrinkage,
         ),
     }
     benchmark = histories.get("SPY") or []
@@ -274,21 +338,25 @@ def forecast_assets(
         expected_5 = max(-cap / 2.0, min(expected_5, cap / 2.0))
         uncertainty_5 = models["5d"].residual_std
         uncertainty_20 = models["20d"].residual_std
+        signals = dict(zip(FEATURE_NAMES, features))
+        signals["rolling_beta_60d"] = _rolling_beta(
+            closes, benchmark_closes, len(dates) - 1
+        )
         forecasts.append(
             AssetForecast(
                 symbol=symbol,
                 data_as_of=dates[-1],
                 expected_excess_return_5d=expected_5,
                 expected_excess_return_20d=expected_20,
-                probability_positive_excess_5d=_normal_cdf(
-                    expected_5 / uncertainty_5
+                probability_positive_excess_5d=_empirical_positive_probability(
+                    expected_5, models["5d"].validation_errors
                 ),
-                probability_positive_excess_20d=_normal_cdf(
-                    expected_20 / uncertainty_20
+                probability_positive_excess_20d=_empirical_positive_probability(
+                    expected_20, models["20d"].validation_errors
                 ),
                 uncertainty_5d=uncertainty_5,
                 uncertainty_20d=uncertainty_20,
-                signals=dict(zip(FEATURE_NAMES, features)),
+                signals=signals,
             )
         )
     return forecasts, models
@@ -339,9 +407,8 @@ def infer_market_regime(
         _, asset_closes, _, benchmark_closes = _aligned_series(bars, spy)
         if len(asset_closes) < 21:
             continue
-        residual = (
-            asset_closes[-1] / asset_closes[-21] - 1
-            - (benchmark_closes[-1] / benchmark_closes[-21] - 1)
+        residual = _beta_adjusted_return(
+            asset_closes, benchmark_closes, len(asset_closes) - 1, 20
         )
         positive += int(residual > 0)
         total += 1

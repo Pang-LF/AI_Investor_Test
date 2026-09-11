@@ -1,7 +1,8 @@
 # Live runbook
 
-The system is live-capable but defaults to `SHADOW`. Do not bypass the sequence
-below. Robinhood states that the account owner is responsible for agent orders.
+The repository is currently configured as LIVE-capable and LIVE-enabled, but a
+daily version-bound arm is still mandatory. Do not bypass the sequence below.
+Robinhood states that the account owner is responsible for agent orders.
 
 ## Every trading day
 
@@ -29,8 +30,8 @@ below. Robinhood states that the account owner is responsible for agent orders.
    live_trading = true
    ```
 
-6. Arm only the current or next calendar date. The arm stores a one-way account hash, not
-   the account number:
+6. Arm only the current or next calendar date. The arm stores a one-way account
+   hash—not the account number—and the active strategy/risk-policy versions:
 
    ```bash
    .venv/bin/ai-investor arm-live --date YYYY-MM-DD \
@@ -41,6 +42,9 @@ The scheduler still exits without an order unless there is a scheduled decision
 window or a deterministic market trigger, a quantitative candidate, an LLM
 `allow`, a valid optimizer target, and a passing order review plus hard-risk
 approval.
+
+Any strategy or hard-risk version change invalidates an existing arm and requires
+the explicit command again.
 
 ## Emergency stop
 
@@ -60,7 +64,9 @@ cancel them in Robinhood if necessary.
 - Cash-funded, long-only equities and unleveraged ETFs.
 - No options, crypto, futures, short sales, leveraged/inverse ETFs, or borrowing.
 - Up to 100% of NAV in one position or one order, 100% daily turnover, and 10
-  positions. These concentration limits are deliberately aggressive.
+  positions. These hard concentration limits are deliberately aggressive; the
+  current investment strategy applies separate 35% per-name and 50% per-sector
+  soft caps.
 - New buys stop after an 8% same-day loss or a 20% drawdown from the recorded
   high-water mark. Gap losses can exceed those values.
 - Each order requires a current quote, no more than 0.30% bid/ask spread,

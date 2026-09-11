@@ -22,19 +22,20 @@ Every 15 minutes during regular US market hours:
 1. A no-LLM monitor scans a 60-symbol universe and validates every quote.
 2. Most cycles end immediately. A decision run occurs only at 09:45, 13:00,
    15:30 ET, or on a deterministic move trigger, with at most three per day.
-3. A pooled, regularized model estimates 5- and 20-day SPY-relative returns from
-   prior completed daily bars. Current-day prices never enter model training.
+3. A pooled, regularized model estimates 5- and 20-day rolling-beta-adjusted
+   returns from prior completed daily bars using purged temporal validation.
 4. Up to ten quantitative candidates/current holdings receive one structured
    GPT-5.6 Terra research call. All receive fundamentals and financials; the top
    five receive earnings and news. The LLM can allow or veto; it cannot size an order.
-5. A long-only covariance-shrinkage optimizer creates target weights including
-   cash. No-trade and 100% cash are valid outputs.
+5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
+   per-sector strategy soft caps and creates target weights including cash.
+   No-trade and 100% cash are valid outputs.
 6. The independent hard-risk engine checks the target and fresh execution quote.
 7. A deterministic UUID suppresses duplicate submissions. Robinhood review runs
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.3.0.yaml`](strategies/agentic/strategy_v0.3.0.yaml).
+[`strategies/agentic/strategy_v0.4.0.yaml`](strategies/agentic/strategy_v0.4.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).

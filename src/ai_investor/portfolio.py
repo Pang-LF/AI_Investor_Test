@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from dataclasses import asdict, dataclass
 from statistics import fmean
-from typing import Dict, Mapping, Sequence
+from typing import Dict, Mapping, Optional, Sequence
 
 from .config import PortfolioSettings, RiskSettings
 from .forecasting import AssetForecast
@@ -53,8 +53,21 @@ def shrinkage_covariance(
     return covariance
 
 
-def _project(weights: list[float], cap: float, total_cap: float) -> list[float]:
+def _project(
+    weights: list[float],
+    cap: float,
+    total_cap: float,
+    groups: Sequence[str],
+    group_cap: float,
+) -> list[float]:
     projected = [max(0.0, min(value, cap)) for value in weights]
+    for group in set(groups):
+        indexes = [index for index, value in enumerate(groups) if value == group]
+        group_total = sum(projected[index] for index in indexes)
+        if group_total > group_cap:
+            scale = group_cap / group_total
+            for index in indexes:
+                projected[index] *= scale
     total = sum(projected)
     if total > total_cap:
         projected = [value * total_cap / total for value in projected]
@@ -66,6 +79,7 @@ def optimize_portfolio(
     histories: Mapping[str, Sequence[DailyBar]],
     portfolio: PortfolioSettings,
     risk: RiskSettings,
+    sectors: Optional[Mapping[str, str]] = None,
 ) -> TargetPortfolio:
     chosen = sorted(
         forecasts,
@@ -75,6 +89,9 @@ def optimize_portfolio(
     if not chosen:
         return TargetPortfolio(weights={}, cash_weight=1.0, objective_value=0.0)
     symbols = [item.symbol for item in chosen]
+    sector_groups = [
+        (sectors or {}).get(symbol) or f"unknown:{symbol}" for symbol in symbols
+    ]
     covariance = shrinkage_covariance(symbols, histories, shrinkage=0.50)
     expected_daily = [item.expected_excess_return_20d / 20.0 for item in chosen]
     uncertainty_daily = [item.uncertainty_20d / math.sqrt(20.0) for item in chosen]
@@ -94,8 +111,10 @@ def optimize_portfolio(
             )
         weights = _project(
             [weight + step * value for weight, value in zip(weights, gradient)],
-            risk.max_position_fraction,
+            min(risk.max_position_fraction, portfolio.soft_max_position_fraction),
             portfolio.max_invested_fraction,
+            sector_groups,
+            portfolio.soft_max_sector_fraction,
         )
     variance = sum(
         weights[left] * covariance[left][right] * weights[right]

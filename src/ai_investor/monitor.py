@@ -18,8 +18,10 @@ from .universe import (
     entries_from_json,
     entries_to_json,
     resolve_agentic_account,
-    scan_core_candidates,
     scan_event_candidates,
+    scan_large_candidates,
+    scan_mid_candidates,
+    scan_small_candidates,
 )
 
 
@@ -69,15 +71,22 @@ class UniverseCache:
             return None
         if raw.get("trading_date") != trading_date:
             return None
-        if raw.get("cache_version") != 2:
+        if raw.get("cache_version") != 3:
             return None
-        core_candidates = entries_from_json(raw.get("core_candidates", []))
+        large_candidates = entries_from_json(raw.get("large_candidates", []))
+        mid_candidates = entries_from_json(raw.get("mid_candidates", []))
+        small_candidates = entries_from_json(raw.get("small_candidates", []))
         event_candidates = entries_from_json(raw.get("event_candidates", []))
-        if not core_candidates or not event_candidates:
+        if (
+            not all((large_candidates, mid_candidates, small_candidates))
+            or "event_candidates" not in raw
+        ):
             return None
         return {
             "event_bucket": str(raw.get("event_bucket", "")),
-            "core_candidates": core_candidates,
+            "large_candidates": large_candidates,
+            "mid_candidates": mid_candidates,
+            "small_candidates": small_candidates,
             "event_candidates": event_candidates,
         }
 
@@ -85,16 +94,20 @@ class UniverseCache:
         self,
         trading_date: str,
         event_bucket: str,
-        core_candidates: Sequence[UniverseEntry],
+        large_candidates: Sequence[UniverseEntry],
+        mid_candidates: Sequence[UniverseEntry],
+        small_candidates: Sequence[UniverseEntry],
         event_candidates: Sequence[UniverseEntry],
         entries: Sequence[UniverseEntry],
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "cache_version": 2,
+            "cache_version": 3,
             "trading_date": trading_date,
             "event_bucket": event_bucket,
-            "core_candidates": entries_to_json(core_candidates),
+            "large_candidates": entries_to_json(large_candidates),
+            "mid_candidates": entries_to_json(mid_candidates),
+            "small_candidates": entries_to_json(small_candidates),
             "event_candidates": entries_to_json(event_candidates),
             "entries": entries_to_json(entries),
         }
@@ -312,23 +325,31 @@ def run_monitor_cycle(
         )
         cached = cache.load(trading_date)
         if cached is None:
-            core_candidates = scan_core_candidates(client, settings.monitor)
+            large_candidates = scan_large_candidates(client, settings.monitor)
+            mid_candidates = scan_mid_candidates(client, settings.monitor)
+            small_candidates = scan_small_candidates(client, settings.monitor)
             event_candidates = scan_event_candidates(client, settings.monitor)
         else:
-            core_candidates = cached["core_candidates"]
+            large_candidates = cached["large_candidates"]
+            mid_candidates = cached["mid_candidates"]
+            small_candidates = cached["small_candidates"]
             event_candidates = cached["event_candidates"]
             if cached["event_bucket"] != refresh_bucket:
                 event_candidates = scan_event_candidates(client, settings.monitor)
         entries = assemble_universe(
             settings.monitor,
             account.position_symbols,
-            core_candidates,
+            large_candidates,
+            mid_candidates,
+            small_candidates,
             event_candidates,
         )
         cache.save(
             trading_date,
             refresh_bucket,
-            core_candidates,
+            large_candidates,
+            mid_candidates,
+            small_candidates,
             event_candidates,
             entries,
         )

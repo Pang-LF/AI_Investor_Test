@@ -151,7 +151,13 @@ def main() -> None:
             allow_order_submission=False,
         ) as client:
             state = fetch_broker_state(client)
-        path = arm_live(ROOT, state.account_number, args.date)
+        path = arm_live(
+            ROOT,
+            state.account_number,
+            args.date,
+            settings.strategy_version,
+            settings.risk.policy_version,
+        )
         print(f"Daily live arm created at {path}; config kill switch is unchanged.")
     elif args.command == "disarm-live":
         path = ROOT / ".local" / "state" / "live_arm.json"
