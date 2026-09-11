@@ -22,8 +22,10 @@ from .execution import (
 from .forecasting import (
     calibration_diagnostics,
     candidate_forecasts,
+    execution_gate_failures,
     execution_candidate_forecasts,
     forecast_assets,
+    holding_gate_failures,
     infer_market_regime,
 )
 from .health import clear_operational_failures, report_operational_failure
@@ -32,6 +34,7 @@ from .market_data import HistoricalCache, get_daily_histories
 from .monitor import run_monitor_cycle
 from .notification import (
     build_decision_email,
+    classify_intraday_tone,
     flush_outbox,
     require_email_configuration,
     send_or_queue,
@@ -174,6 +177,9 @@ def run_agent_cycle(
                 )
             ledger.record_equity_snapshot(current.isoformat(), trading_date, state.portfolio_value, state.cash)
             reconcile_orders(client, ledger, state, trading_date)
+            ledger.prune_holding_exit_states(
+                {position.symbol for position in state.positions}
+            )
             entries = monitor_payload.get("universe") or []
             symbols = list(dict.fromkeys([str(item.get("symbol", "")).upper() for item in entries if item.get("symbol")] + [p.symbol for p in state.positions]))
             forecast_started = time.monotonic()
@@ -330,9 +336,68 @@ def run_agent_cycle(
             llm_reviewed = [
                 item for item in research_set if item.symbol in allowed
             ]
-            eligible = execution_candidate_forecasts(
+            entry_eligible = execution_candidate_forecasts(
                 llm_reviewed, settings.forecast
             )
+            execution_gate_by_symbol = {
+                item.symbol: list(execution_gate_failures(item, settings.forecast))
+                for item in llm_reviewed
+            }
+            assessments = {
+                str(item.get("symbol", "")).upper(): item
+                for item in research.assessment.get("candidates", [])
+            }
+            eligible_by_symbol = {item.symbol: item for item in entry_eligible}
+            holding_decisions: Dict[str, Dict[str, Any]] = {}
+            minimum_weights: Dict[str, float] = {}
+            for position in state.positions:
+                forecast = by_symbol.get(position.symbol)
+                assessment = assessments.get(position.symbol, {})
+                verdict = str(assessment.get("verdict", "missing_assessment"))
+                severity = str(
+                    assessment.get("data_quality_severity", "none")
+                ).lower()
+                quant_failures = (
+                    list(holding_gate_failures(forecast, settings.forecast))
+                    if forecast is not None
+                    else ["missing_forecast"]
+                )
+                immediate_exit = verdict == "veto" or severity == "critical"
+                failing = immediate_exit or verdict != "allow" or bool(quant_failures)
+                reason_parts = quant_failures + (
+                    [f"llm_verdict={verdict}"] if verdict != "allow" else []
+                ) + (["critical_data_conflict"] if severity == "critical" else [])
+                confirmations = ledger.update_holding_exit_signal(
+                    symbol=position.symbol,
+                    decision_key=decision_key,
+                    failing=failing,
+                    reason=",".join(reason_parts) or "holding_gate_passed",
+                )
+                exit_confirmed = immediate_exit or (
+                    failing
+                    and confirmations >= settings.forecast.holding_exit_confirmation_runs
+                )
+                if forecast is not None and not exit_confirmed:
+                    eligible_by_symbol.setdefault(position.symbol, forecast)
+                    if failing and state.portfolio_value > 0:
+                        # The first non-critical failure cannot force a sale.
+                        minimum_weights[position.symbol] = (
+                            position.market_value / state.portfolio_value
+                        )
+                holding_decisions[position.symbol] = {
+                    "status": (
+                        "exit_confirmed" if exit_confirmed
+                        else "pending_exit_retained" if failing
+                        else "holding_gate_passed"
+                    ),
+                    "immediate_exit": immediate_exit,
+                    "consecutive_failures": confirmations,
+                    "required_confirmations": (
+                        settings.forecast.holding_exit_confirmation_runs
+                    ),
+                    "reasons": reason_parts,
+                }
+            eligible = list(eligible_by_symbol.values())
             sectors = {
                 str(item.get("symbol", "")).upper(): str(item.get("sector", ""))
                 for item in entries
@@ -351,6 +416,7 @@ def run_agent_cycle(
                     settings.risk,
                     sectors,
                     current_weights=current_weights,
+                    minimum_weights=minimum_weights,
                 )
             else:
                 # Research-only calibration mode must never liquidate existing
@@ -413,6 +479,9 @@ def run_agent_cycle(
                 target_weights=target.weights,
                 orders=outcomes,
                 timings=timings,
+                execution_gate_failures=execution_gate_by_symbol,
+                holding_decisions=holding_decisions,
+                portfolio_diagnostics=target.diagnostics,
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
@@ -430,12 +499,19 @@ def run_agent_cycle(
                 "llm_model": settings.openai_model, "llm_usage": asdict(research),
                 "market_snapshot": monitor_payload.get("quotes", []),
                 "intraday_market_summary": monitor_payload.get("market_summary") or {},
+                "structural_regime": regime.to_dict(),
+                "intraday_tone": classify_intraday_tone(
+                    monitor_payload.get("market_summary") or {}
+                ),
                 "current_positions": [asdict(item) for item in state.positions],
                 "candidate_stocks": [item.to_dict() for item in research_set],
                 "execution_calibration_approved": (
                     settings.forecast.execution_calibration_approved
                 ),
                 "execution_eligible_stocks": [item.symbol for item in eligible],
+                "entry_eligible_stocks": [item.symbol for item in entry_eligible],
+                "execution_gate_failures": execution_gate_by_symbol,
+                "holding_decisions": holding_decisions,
                 "model_calibration": {
                     key: calibration_diagnostics(model)
                     for key, model in models.items()

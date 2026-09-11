@@ -28,15 +28,17 @@ Every 15 minutes during regular US market hours:
 4. Up to five new research candidates plus current holdings receive one structured
    GPT-5.6 Terra research call. All receive fundamentals and financials; the top
    five receive earnings and news. The LLM can allow or veto; it cannot size an order.
+   Critical data conflicts are separated from quarantined non-critical fields.
 5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
    per-sector strategy soft caps and creates target weights including cash.
-   No-trade and 100% cash are valid outputs.
+   No-trade and 100% cash are valid outputs. Existing holdings use lower hold
+   thresholds and two-run confirmation for non-critical exits.
 6. The independent hard-risk engine checks the target and fresh execution quote.
 7. A deterministic UUID suppresses duplicate submissions. Robinhood review runs
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.5.1.yaml`](strategies/agentic/strategy_v0.5.1.yaml).
+[`strategies/agentic/strategy_v0.5.2.yaml`](strategies/agentic/strategy_v0.5.2.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).

@@ -83,6 +83,14 @@ class Ledger:
             );
             CREATE INDEX IF NOT EXISTS orders_date_idx
                 ON orders(trading_date, created_at);
+
+            CREATE TABLE IF NOT EXISTS holding_exit_state (
+                symbol TEXT PRIMARY KEY,
+                consecutive_failures INTEGER NOT NULL,
+                last_decision_key TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             """
         )
         columns = {
@@ -272,6 +280,63 @@ class Ledger:
             "SELECT * FROM orders WHERE broker_order_id=?", (broker_order_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    def update_holding_exit_signal(
+        self,
+        *,
+        symbol: str,
+        decision_key: str,
+        failing: bool,
+        reason: str,
+    ) -> int:
+        existing = self.connection.execute(
+            "SELECT * FROM holding_exit_state WHERE symbol=?", (symbol,)
+        ).fetchone()
+        if existing and existing["last_decision_key"] == decision_key:
+            return int(existing["consecutive_failures"])
+        failures = (
+            int(existing["consecutive_failures"]) + 1
+            if failing and existing
+            else 1 if failing else 0
+        )
+        self.connection.execute(
+            """
+            INSERT INTO holding_exit_state(
+                symbol, consecutive_failures, last_decision_key, reason, updated_at
+            ) VALUES(?,?,?,?,?)
+            ON CONFLICT(symbol) DO UPDATE SET
+                consecutive_failures=excluded.consecutive_failures,
+                last_decision_key=excluded.last_decision_key,
+                reason=excluded.reason,
+                updated_at=excluded.updated_at
+            """,
+            (
+                symbol,
+                failures,
+                decision_key,
+                reason,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        self.connection.commit()
+        return failures
+
+    def get_holding_exit_state(self, symbol: str) -> Optional[Dict[str, Any]]:
+        row = self.connection.execute(
+            "SELECT * FROM holding_exit_state WHERE symbol=?", (symbol,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def prune_holding_exit_states(self, active_symbols: set[str]) -> None:
+        if not active_symbols:
+            self.connection.execute("DELETE FROM holding_exit_state")
+        else:
+            placeholders = ",".join("?" for _ in active_symbols)
+            self.connection.execute(
+                f"DELETE FROM holding_exit_state WHERE symbol NOT IN ({placeholders})",
+                tuple(sorted(active_symbols)),
+            )
+        self.connection.commit()
 
     def upsert_order(
         self,

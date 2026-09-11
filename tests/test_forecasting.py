@@ -11,6 +11,7 @@ from ai_investor.forecasting import (
     candidate_forecasts,
     calibration_diagnostics,
     execution_candidate_forecasts,
+    execution_gate_failures,
     fit_ridge_model,
 )
 
@@ -60,6 +61,15 @@ class ForecastingTests(unittest.TestCase):
         )
         self.assertEqual(len(diagnostics["edge_ratio_buckets"]), 6)
 
+    def test_empirical_probability_does_not_double_count_bias(self) -> None:
+        # A raw prediction of zero with uniformly positive residuals is already
+        # calibrated by those residuals; adding their median to the prediction
+        # a second time would overstate the probability.
+        errors = [-0.02, -0.005, 0.02]
+        once = _empirical_positive_probability(0.0, errors)
+        double_counted = _empirical_positive_probability(0.01, errors)
+        self.assertLess(once, double_counted)
+
     def test_research_and_execution_gates_are_separate(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).forecast
         forecast = AssetForecast(
@@ -99,6 +109,21 @@ class ForecastingTests(unittest.TestCase):
             [forecast],
         )
         self.assertEqual(execution_candidate_forecasts([forecast], settings), [])
+
+    def test_execution_gate_reports_the_exact_failed_threshold(self) -> None:
+        settings = Settings.load(Path("config/settings.toml")).forecast
+        forecast = AssetForecast(
+            symbol="PBF", data_as_of="2026-09-11",
+            expected_excess_return_5d=.01,
+            expected_excess_return_20d=.0246,
+            probability_positive_excess_5d=.55,
+            probability_positive_excess_20d=.598,
+            uncertainty_5d=.10, uncertainty_20d=.2134, signals={},
+            calibration_date_blocks_20d=7,
+        )
+        failures = execution_gate_failures(forecast, settings)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("edge_ratio", failures[0])
 
 
 if __name__ == "__main__":

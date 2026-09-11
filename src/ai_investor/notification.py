@@ -19,6 +19,26 @@ class DeliveryResult:
     detail: str = ""
 
 
+def classify_intraday_tone(summary: Mapping[str, Any]) -> str:
+    breadth = float(summary.get("positive_breadth") or 0.0)
+    etfs = summary.get("fixed_etf_changes") or {}
+    spy = float(etfs.get("SPY") or 0.0)
+    qqq = float(etfs.get("QQQ") or 0.0)
+    if breadth >= 0.65 and spy >= 0.005 and qqq >= 0.005:
+        return "risk_on"
+    if breadth <= 0.35 and spy <= -0.005 and qqq <= -0.005:
+        return "risk_off"
+    return "mixed"
+
+
+def _calibration_confidence(blocks: int) -> str:
+    if blocks < 10:
+        return "LOW"
+    if blocks < 20:
+        return "MEDIUM"
+    return "HIGH"
+
+
 def require_email_configuration() -> SMTPConfig:
     config = get_smtp_config()
     if config is None:
@@ -45,6 +65,9 @@ def build_decision_email(
     target_weights: Mapping[str, float],
     orders: Sequence[Mapping[str, Any]],
     timings: Mapping[str, float],
+    execution_gate_failures: Optional[Mapping[str, Sequence[str]]] = None,
+    holding_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    portfolio_diagnostics: Optional[Mapping[str, Any]] = None,
     execution_calibration_approved: bool = True,
     pipeline_error: Optional[str] = None,
 ) -> tuple[str, str]:
@@ -52,12 +75,18 @@ def build_decision_email(
         str(item.get("symbol", "")).upper(): item
         for item in research.assessment.get("candidates", [])
     }
+    gate_failures = execution_gate_failures or {}
+    holding_statuses = holding_decisions or {}
     lines = [
         f"Run: {run_id}",
         f"Time: {timestamp}",
         f"Mode: {mode}",
         f"Portfolio: ${portfolio_value:,.2f}; cash: ${cash:,.2f}",
-        f"Market data: {quote_count} fresh quotes; regime={regime.label}",
+        (
+            f"Market data: {quote_count} fresh quotes; "
+            f"structural_regime={regime.label}; "
+            f"intraday_tone={classify_intraday_tone(intraday_market_summary)}"
+        ),
         (
             "Regime metrics: SPY 20d={:.2%}, SPY 60d={:.2%}, "
             "vol={:.2%}, breadth={:.2%}"
@@ -78,10 +107,25 @@ def build_decision_email(
         verdict = str(item.get("verdict", "missing_assessment"))
         rationale = str(item.get("concise_rationale", "No LLM rationale returned"))
         target = target_weights.get(forecast.symbol, 0.0)
+        holding_state = str(
+            holding_statuses.get(forecast.symbol, {}).get("status", "")
+        )
         if not execution_calibration_approved:
             action_reason = "NOT TRADED: execution calibration is not approved"
+        elif target > 0 and holding_state == "pending_exit_retained":
+            action_reason = (
+                f"RETAINED: pending non-critical exit confirmation; "
+                f"target weight={target:.2%}"
+            )
+        elif target > 0 and holding_state == "holding_gate_passed":
+            action_reason = f"RETAINED/REBALANCED: target weight={target:.2%}"
         elif verdict != "allow":
             action_reason = f"NOT SELECTED: LLM verdict={verdict}"
+        elif gate_failures.get(forecast.symbol):
+            action_reason = (
+                "NOT SELECTED: execution gate failed: "
+                + "; ".join(gate_failures[forecast.symbol])
+            )
         elif target <= 0:
             action_reason = "NOT SELECTED: optimizer assigned zero weight"
         else:
@@ -89,18 +133,42 @@ def build_decision_email(
         lines.extend(
             [
                 (
-                    f"- {forecast.symbol}: raw expected excess 20d="
+                    f"- {forecast.symbol}: model forecast 20d="
+                    f"{forecast.model_prediction_excess_return_20d:.2%} × "
+                    f"shrinkage {forecast.forecast_shrinkage:.2f} = "
+                    f"shrunk forecast "
                     f"{forecast.raw_expected_excess_return_20d:.2%}, "
+                    f"validation bias={forecast.validation_bias_20d:+.2%}, "
                     f"bias-adjusted expected excess 5d="
                     f"{forecast.expected_excess_return_5d:.2%}, 20d="
                     f"{forecast.expected_excess_return_20d:.2%}, "
                     f"raw P={forecast.raw_probability_positive_excess_20d:.1%}, "
                     f"calibrated P(20d>SPY)="
                     f"{forecast.probability_positive_excess_20d:.1%}, "
-                    f"calibration blocks={forecast.calibration_date_blocks_20d}"
+                    f"date-clustered 95% interval="
+                    f"[{forecast.probability_positive_excess_20d_interval[0]:.1%}, "
+                    f"{forecast.probability_positive_excess_20d_interval[1]:.1%}], "
+                    f"calibration observations/date blocks="
+                    f"{forecast.calibration_observations_20d}/"
+                    f"{forecast.calibration_date_blocks_20d}, "
+                    f"confidence={_calibration_confidence(forecast.calibration_date_blocks_20d)}"
                 ),
                 f"  {action_reason}",
+                (
+                    "  Holding state: "
+                    + json.dumps(
+                        holding_statuses.get(forecast.symbol, {}),
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    if forecast.symbol in holding_statuses
+                    else "  Holding state: not_currently_held"
+                ),
                 f"  Rationale: {rationale}",
+                (
+                    f"  Data quality: {item.get('data_quality_severity', 'none')}; "
+                    f"issues={item.get('data_quality_issues', [])}"
+                ),
                 f"  Bull: {item.get('bull_case', '')}",
                 f"  Bear: {item.get('bear_case', '')}",
                 f"  Falsification: {item.get('falsification', '')}",
@@ -119,10 +187,16 @@ def build_decision_email(
                 f"latency={research.latency_seconds:.2f}s"
             ),
             "Pipeline timings: " + json.dumps(dict(timings), sort_keys=True),
+            "Portfolio sizing diagnostics: "
+            + json.dumps(
+                dict(portfolio_diagnostics or {}),
+                ensure_ascii=False,
+                default=str,
+            ),
             (
-                "Execution calibration: APPROVED"
+                "Forecast calibration gate: PROVISIONALLY_ENABLED"
                 if execution_calibration_approved
-                else "Execution calibration: RESEARCH ONLY; orders blocked"
+                else "Forecast calibration gate: RESEARCH_ONLY; orders blocked"
             ),
         ]
     )

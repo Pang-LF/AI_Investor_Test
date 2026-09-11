@@ -59,15 +59,22 @@ class AssetForecast:
     uncertainty_5d: float
     uncertainty_20d: float
     signals: Dict[str, float]
+    model_prediction_excess_return_5d: float = 0.0
+    model_prediction_excess_return_20d: float = 0.0
+    forecast_shrinkage: float = 1.0
     raw_expected_excess_return_5d: float = 0.0
     raw_expected_excess_return_20d: float = 0.0
     raw_probability_positive_excess_5d: float = 0.5
     raw_probability_positive_excess_20d: float = 0.5
     validation_bias_5d: float = 0.0
     validation_bias_20d: float = 0.0
+    calibration_observations_5d: int = 0
+    calibration_observations_20d: int = 0
+    probability_positive_excess_5d_interval: Tuple[float, float] = (0.0, 1.0)
+    probability_positive_excess_20d_interval: Tuple[float, float] = (0.0, 1.0)
     calibration_date_blocks_5d: int = 0
     calibration_date_blocks_20d: int = 0
-    model_version: str = "pooled_beta_ridge_v0.3.0"
+    model_version: str = "pooled_beta_ridge_v0.3.1"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -340,6 +347,23 @@ def _raw_positive_probability(prediction: float, uncertainty: float) -> float:
     return 0.5 * (1.0 + math.erf(z))
 
 
+def _date_clustered_probability_interval(
+    prediction: float,
+    validation_errors: Sequence[float],
+    validation_dates: Sequence[str],
+) -> Tuple[float, float]:
+    by_date: Dict[str, List[float]] = {}
+    for date, error in zip(validation_dates, validation_errors):
+        by_date.setdefault(date, []).append(float(prediction + error > 0))
+    rates = [fmean(values) for values in by_date.values() if values]
+    if len(rates) < 2:
+        return (0.0, 1.0)
+    center = fmean(rates)
+    variance = sum((value - center) ** 2 for value in rates) / (len(rates) - 1)
+    margin = 1.96 * math.sqrt(variance / len(rates))
+    return (max(0.0, center - margin), min(1.0, center + margin))
+
+
 def forecast_assets(
     histories: Mapping[str, Sequence[DailyBar]], settings: ForecastSettings
 ) -> Tuple[List[AssetForecast], Dict[str, RidgeModel]]:
@@ -386,14 +410,17 @@ def forecast_assets(
                 expected_excess_return_5d=expected_5,
                 expected_excess_return_20d=expected_20,
                 probability_positive_excess_5d=_empirical_positive_probability(
-                    expected_5, models["5d"].validation_errors
+                    raw_expected_5, models["5d"].validation_errors
                 ),
                 probability_positive_excess_20d=_empirical_positive_probability(
-                    expected_20, models["20d"].validation_errors
+                    raw_expected_20, models["20d"].validation_errors
                 ),
                 uncertainty_5d=uncertainty_5,
                 uncertainty_20d=uncertainty_20,
                 signals=signals,
+                model_prediction_excess_return_5d=raw_5,
+                model_prediction_excess_return_20d=raw_20,
+                forecast_shrinkage=settings.shrinkage,
                 raw_expected_excess_return_5d=raw_expected_5,
                 raw_expected_excess_return_20d=raw_expected_20,
                 raw_probability_positive_excess_5d=_raw_positive_probability(
@@ -404,6 +431,22 @@ def forecast_assets(
                 ),
                 validation_bias_5d=models["5d"].validation_bias,
                 validation_bias_20d=models["20d"].validation_bias,
+                calibration_observations_5d=models["5d"].validation_samples,
+                calibration_observations_20d=models["20d"].validation_samples,
+                probability_positive_excess_5d_interval=(
+                    _date_clustered_probability_interval(
+                        raw_expected_5,
+                        models["5d"].validation_errors,
+                        models["5d"].validation_dates,
+                    )
+                ),
+                probability_positive_excess_20d_interval=(
+                    _date_clustered_probability_interval(
+                        raw_expected_20,
+                        models["20d"].validation_errors,
+                        models["20d"].validation_dates,
+                    )
+                ),
                 calibration_date_blocks_5d=models["5d"].validation_date_blocks,
                 calibration_date_blocks_20d=models["20d"].validation_date_blocks,
             )
@@ -450,18 +493,58 @@ def execution_candidate_forecasts(
     if not settings.execution_calibration_approved:
         return []
     return [
-        forecast
-        for forecast in forecasts
-        if forecast.calibration_date_blocks_20d
-        >= settings.execution_min_calibration_date_blocks
-        and forecast.expected_excess_return_20d
-        > settings.execution_min_bias_adjusted_excess_return_20d
-        and forecast.probability_positive_excess_20d
-        >= settings.execution_min_calibrated_probability_positive
-        and forecast.expected_excess_return_20d
-        / max(forecast.uncertainty_20d, 1e-9)
-        >= settings.execution_min_edge_ratio_20d
+        forecast for forecast in forecasts
+        if not execution_gate_failures(forecast, settings)
     ]
+
+
+def execution_gate_failures(
+    forecast: AssetForecast, settings: ForecastSettings
+) -> Tuple[str, ...]:
+    failures: List[str] = []
+    if not settings.execution_calibration_approved:
+        failures.append("forecast_calibration_disabled")
+    if forecast.calibration_date_blocks_20d < settings.execution_min_calibration_date_blocks:
+        failures.append(
+            f"calibration_blocks={forecast.calibration_date_blocks_20d}"
+            f"<{settings.execution_min_calibration_date_blocks}"
+        )
+    if forecast.expected_excess_return_20d <= settings.execution_min_bias_adjusted_excess_return_20d:
+        failures.append(
+            f"adjusted_alpha={forecast.expected_excess_return_20d:.4f}"
+            f"<={settings.execution_min_bias_adjusted_excess_return_20d:.4f}"
+        )
+    if forecast.probability_positive_excess_20d < settings.execution_min_calibrated_probability_positive:
+        failures.append(
+            f"calibrated_probability={forecast.probability_positive_excess_20d:.4f}"
+            f"<{settings.execution_min_calibrated_probability_positive:.4f}"
+        )
+    edge_ratio = forecast.expected_excess_return_20d / max(
+        forecast.uncertainty_20d, 1e-9
+    )
+    if edge_ratio < settings.execution_min_edge_ratio_20d:
+        failures.append(
+            f"edge_ratio={edge_ratio:.4f}<{settings.execution_min_edge_ratio_20d:.4f}"
+        )
+    return tuple(failures)
+
+
+def holding_gate_failures(
+    forecast: AssetForecast, settings: ForecastSettings
+) -> Tuple[str, ...]:
+    failures: List[str] = []
+    if forecast.calibration_date_blocks_20d < settings.execution_min_calibration_date_blocks:
+        failures.append("insufficient_calibration_blocks")
+    if forecast.expected_excess_return_20d <= settings.holding_min_bias_adjusted_excess_return_20d:
+        failures.append("holding_adjusted_alpha")
+    if forecast.probability_positive_excess_20d < settings.holding_min_calibrated_probability_positive:
+        failures.append("holding_calibrated_probability")
+    edge_ratio = forecast.expected_excess_return_20d / max(
+        forecast.uncertainty_20d, 1e-9
+    )
+    if edge_ratio < settings.holding_min_edge_ratio_20d:
+        failures.append("holding_edge_ratio")
+    return tuple(failures)
 
 
 def calibration_diagnostics(model: RidgeModel) -> Dict[str, object]:
@@ -522,6 +605,11 @@ def calibration_diagnostics(model: RidgeModel) -> Dict[str, object]:
         "overlap_control": "one_cross_section_per_horizon_date_block",
         "validation_samples": model.validation_samples,
         "validation_date_blocks": model.validation_date_blocks,
+        "calibration_confidence": (
+            "LOW" if model.validation_date_blocks < 10
+            else "MEDIUM" if model.validation_date_blocks < 20
+            else "HIGH"
+        ),
         "median_validation_bias": model.validation_bias,
         "residual_std": model.residual_std,
         "edge_ratio_buckets": rows,

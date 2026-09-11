@@ -7,7 +7,11 @@ from unittest.mock import patch
 from ai_investor.credential_store import SMTPConfig
 from ai_investor.forecasting import AssetForecast, MarketRegime
 from ai_investor.health import clear_operational_failures, report_operational_failure
-from ai_investor.notification import build_decision_email, send_or_queue
+from ai_investor.notification import (
+    build_decision_email,
+    classify_intraday_tone,
+    send_or_queue,
+)
 from ai_investor.research import ResearchResult
 
 
@@ -41,6 +45,43 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("AAA", subject)
         self.assertIn("SELECTED: target weight=50.00%", body)
         self.assertIn("NOT SELECTED: LLM verdict=veto", body)
+
+    def test_email_distinguishes_execution_gate_from_optimizer(self) -> None:
+        forecast = AssetForecast(
+            "PBF", "2026-01-01", .01, .0246, .55, .598, .10, .2134, {},
+            calibration_observations_20d=336,
+            calibration_date_blocks_20d=7,
+        )
+        research = ResearchResult(
+            model="gpt-5.6-terra",
+            assessment={"market_summary": "mixed", "candidates": [{
+                "symbol": "PBF", "verdict": "allow", "bull_case": "b",
+                "bear_case": "r", "falsification": "f",
+                "concise_rationale": "ok", "data_quality_severity": "none",
+                "data_quality_issues": [],
+            }]},
+            source_tools=(), input_tokens=1, output_tokens=1,
+            estimated_cost_usd=0.0, latency_seconds=1.0,
+        )
+        _, body = build_decision_email(
+            run_id="r", timestamp="2026-01-01T15:00:00Z", mode="LIVE",
+            portfolio_value=1000, cash=1000, quote_count=60, triggers=[],
+            intraday_market_summary={"positive_breadth": .8,
+                "fixed_etf_changes": {"SPY": .01, "QQQ": .01}},
+            regime=MarketRegime("risk_off", -.01, .01, .2, .4),
+            forecasts=[forecast], research=research, target_weights={}, orders=[],
+            timings={}, execution_gate_failures={"PBF": ["edge_ratio=0.115<0.150"]},
+        )
+        self.assertIn("structural_regime=risk_off; intraday_tone=risk_on", body)
+        self.assertIn("execution gate failed", body)
+        self.assertIn("336/7, confidence=LOW", body)
+
+    def test_intraday_tone_has_a_mixed_middle_state(self) -> None:
+        self.assertEqual(
+            classify_intraday_tone({"positive_breadth": .5,
+                "fixed_etf_changes": {"SPY": .001, "QQQ": -.001}}),
+            "mixed",
+        )
 
     def test_failed_delivery_is_persisted_to_outbox(self) -> None:
         config = SMTPConfig("smtp.example.com", 465, "u", "p", "a@b.com", "c@d.com")

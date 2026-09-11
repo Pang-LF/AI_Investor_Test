@@ -173,6 +173,10 @@ class ForecastSettings:
     execution_min_bias_adjusted_excess_return_20d: float
     execution_min_edge_ratio_20d: float
     execution_min_calibration_date_blocks: int
+    holding_min_calibrated_probability_positive: float
+    holding_min_bias_adjusted_excess_return_20d: float
+    holding_min_edge_ratio_20d: float
+    holding_exit_confirmation_runs: int
     max_abs_forecast_20d: float
 
     @classmethod
@@ -205,6 +209,14 @@ class ForecastSettings:
             execution_min_calibration_date_blocks=int(
                 raw["execution_min_calibration_date_blocks"]
             ),
+            holding_min_calibrated_probability_positive=float(
+                raw["holding_min_calibrated_probability_positive"]
+            ),
+            holding_min_bias_adjusted_excess_return_20d=float(
+                raw["holding_min_bias_adjusted_excess_return_20d"]
+            ),
+            holding_min_edge_ratio_20d=float(raw["holding_min_edge_ratio_20d"]),
+            holding_exit_confirmation_runs=int(raw["holding_exit_confirmation_runs"]),
             max_abs_forecast_20d=float(raw["max_abs_forecast_20d"]),
         )
         if settings.history_calendar_days < 120:
@@ -223,6 +235,12 @@ class ForecastSettings:
             raise RuntimeError("Execution calibration needs at least five non-overlapping blocks")
         if settings.execution_min_edge_ratio_20d < 0:
             raise RuntimeError("Execution edge-ratio threshold must be nonnegative")
+        if not 0 < settings.holding_min_calibrated_probability_positive < 1:
+            raise RuntimeError("Holding probability threshold must be in (0, 1)")
+        if settings.holding_min_edge_ratio_20d >= settings.execution_min_edge_ratio_20d:
+            raise RuntimeError("Holding edge threshold must be below the entry threshold")
+        if settings.holding_exit_confirmation_runs < 2:
+            raise RuntimeError("A quantitative exit requires at least two confirmations")
         return settings
 
 

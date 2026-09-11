@@ -217,6 +217,25 @@ class ExecutionSafetyTests(unittest.TestCase):
                 self.assertEqual(row["status"], "submitted")
                 self.assertEqual(ledger.daily_order_count("2026-01-01"), 1)
 
+    def test_holding_exit_confirmation_is_idempotent_per_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Ledger(Path(directory) / "ledger.sqlite") as ledger:
+                first = ledger.update_holding_exit_signal(
+                    symbol="AAA", decision_key="d1", failing=True, reason="weak"
+                )
+                duplicate = ledger.update_holding_exit_signal(
+                    symbol="AAA", decision_key="d1", failing=True, reason="weak"
+                )
+                second = ledger.update_holding_exit_signal(
+                    symbol="AAA", decision_key="d2", failing=True, reason="weak"
+                )
+                reset = ledger.update_holding_exit_signal(
+                    symbol="AAA", decision_key="d3", failing=False, reason="pass"
+                )
+                self.assertEqual((first, duplicate, second, reset), (1, 1, 2, 0))
+                ledger.prune_holding_exit_states(set())
+                self.assertIsNone(ledger.get_holding_exit_state("AAA"))
+
     def test_fetch_broker_state_values_positions_with_quotes(self) -> None:
         class FakeClient:
             def call_tool(self, name, arguments):
@@ -336,6 +355,25 @@ class ExecutionSafetyTests(unittest.TestCase):
             [forecast], {"AAA": bars}, portfolio, risk_settings()
         )
         self.assertEqual(result.weights, {})
+
+    def test_optimizer_respects_pending_exit_weight_floor(self) -> None:
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bars = [
+            DailyBar("AAA", (base + timedelta(days=index)).isoformat(), 100, 101, 99,
+                     100 + index * 0.1, 1_000_000)
+            for index in range(80)
+        ]
+        forecast = AssetForecast(
+            "AAA", "2026-03-20", -0.01, -0.01, 0.4, 0.4, 0.05, 0.10, {}
+        )
+        portfolio = PortfolioSettings(
+            1.0, 0.35, 0.50, 1.0, 0.0, 100, 0.5, 10, 0.004
+        )
+        result = optimize_portfolio(
+            [forecast], {"AAA": bars}, portfolio, risk_settings(),
+            current_weights={"AAA": 0.05}, minimum_weights={"AAA": 0.05},
+        )
+        self.assertGreaterEqual(result.weights["AAA"], 0.05 - 1e-8)
 
     def test_shadow_execution_reviews_but_never_places(self) -> None:
         class FakeClient:

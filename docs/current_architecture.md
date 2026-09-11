@@ -111,7 +111,9 @@ Validation residuals are defined as `realized - shrunk prediction`. Consecutive
 20-day labels overlap, so calibration retains only one cross-section per
 horizon-length date block. The median non-overlapping OOS residual corrects
 forecast bias. Calibrated positive-return probability comes from that empirical
-OOS residual distribution; a separate normal-error raw probability is retained
+OOS residual distribution applied to the shrunk forecast before bias adjustment,
+which is equivalent to applying centered residuals to the bias-adjusted forecast
+and avoids counting the bias twice. A separate normal-error raw probability is retained
 only for inexpensive research qualification.
 
 The decision funnel has three levels. Level 1 sends at most five new names to
@@ -120,6 +122,15 @@ least 48%; Dynamic/Event names can enter research without passing that gate.
 This is permission to spend research cost, never permission to buy. Current
 holdings are added first so they receive explicit retain/exit review.
 
+Entry and holding rules are asymmetric. A new position must pass the full Level
+2 entry gate. An existing position can remain eligible down to -0.5% adjusted
+20-day alpha, 45% calibrated probability, and -0.05 edge ratio. A non-critical
+quantitative or `insufficient_evidence` exit signal must occur in two distinct
+decision runs before it can force liquidation; the first signal places a floor
+at the current weight. An LLM `veto` or critical identity/tradability/corporate-
+action conflict can exit immediately. This state is durable and idempotent in
+SQLite.
+
 Level 2 requires at least 0.5% bias-adjusted 20-day alpha, 55% calibrated
 probability, a 0.15 expected-alpha/uncertainty ratio, at least five
 non-overlapping calibration blocks, and no LLM veto. These provisional thresholds
@@ -127,6 +138,9 @@ were enabled on 2026-09-11 after a 22-block expanding walk-forward diagnostic.
 That diagnostic uses a static current universe and is therefore affected by
 survivorship and selection bias; the live ledger must replace it with prospective
 evidence. The thresholds are protective floors, not a proven optimal policy.
+Each email labels a seven-block calibration as LOW confidence and reports a
+date-clustered 95% interval rather than presenting the empirical point estimate
+as precise certainty.
 
 Level 3, once enabled, makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
@@ -149,7 +163,10 @@ return `allow`, `veto`, or `insufficient_evidence`, plus a concise rationale,
 bull case, bear case, and falsification condition for each name. `allow` means
 only "no material thesis-breaking information found." The prompt explicitly
 calls out halts, delisting warnings, recent reverse splits, unresolved
-restructurings, and inconsistent corporate-action data.
+restructurings, and critical corporate-action data. Stale optional fields such
+as an old dividend record are quarantined as non-critical and cannot alone veto
+an otherwise supported ticker. The structured result records data severity and
+the affected fields.
 
 The OpenAI client uses a 480-second request timeout and no SDK retry. The
 separate 600-second decision-age gate rejects a result that arrives too late.
@@ -169,6 +186,13 @@ expected return and penalizes covariance risk, forecast uncertainty, and 0.40%
 estimated round-trip reallocation cost. Optimization starts from current weights;
 if the new portfolio's net objective does not exceed the current portfolio's,
 the current allocation is retained.
+
+The decision log and email expose the actual sizing terms: shrunk and bias-
+adjusted forecast, forecast uncertainty, 20-day variance, current/minimum/final
+weights, expected-return contribution, covariance penalty, estimation penalty,
+reallocation cost, and old/new objective values. There is no hidden Kelly or
+regime multiplier in v0.5.2. Structural regime and deterministic intraday tone
+are reported separately and are research context only.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy
 soft cap per name, a 50% strategy soft cap per known sector, and at most 100%
