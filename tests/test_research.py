@@ -22,6 +22,16 @@ class ResearchTests(unittest.TestCase):
         self.assertEqual(set(payload["earnings"]), set(symbols[:5]))
         self.assertEqual(set(payload["news"]), set(symbols[:5]))
 
+    def test_account_tradability_adds_one_bounded_call(self) -> None:
+        client = FakeResearchClient()
+        symbols = [f"S{index}" for index in range(5)]
+        payload, tools = collect_research(
+            client, symbols, deep_candidate_count=5, account_number="masked-test"
+        )
+        self.assertEqual(len(client.calls), 13)
+        self.assertEqual(tools[0], "get_equity_tradability")
+        self.assertIn("tradability", payload)
+
     def test_official_model_price_ratio(self) -> None:
         terra = estimate_model_cost("gpt-5.6-terra", 40_000, 2_400)
         sol = estimate_model_cost("gpt-5.6-sol", 40_000, 2_400)

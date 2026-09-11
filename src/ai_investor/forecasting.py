@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from statistics import fmean
+from statistics import fmean, median
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from .config import ForecastSettings
@@ -29,6 +29,11 @@ class RidgeModel:
     validation_errors: Tuple[float, ...]
     training_samples: int
     validation_samples: int
+    validation_date_blocks: int
+    validation_bias: float
+    validation_dates: Tuple[str, ...]
+    validation_predictions: Tuple[float, ...]
+    validation_targets: Tuple[float, ...]
 
     def predict(self, features: Sequence[float]) -> float:
         standardized = [
@@ -54,7 +59,15 @@ class AssetForecast:
     uncertainty_5d: float
     uncertainty_20d: float
     signals: Dict[str, float]
-    model_version: str = "pooled_beta_ridge_v0.2.0"
+    raw_expected_excess_return_5d: float = 0.0
+    raw_expected_excess_return_20d: float = 0.0
+    raw_probability_positive_excess_5d: float = 0.5
+    raw_probability_positive_excess_20d: float = 0.5
+    validation_bias_5d: float = 0.0
+    validation_bias_20d: float = 0.0
+    calibration_date_blocks_5d: int = 0
+    calibration_date_blocks_20d: int = 0
+    model_version: str = "pooled_beta_ridge_v0.3.0"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -248,9 +261,19 @@ def fit_ridge_model(
     if len(train) < minimum_samples // 2 or not validation:
         raise ValueError("Insufficient samples after purged temporal split")
     validation_core = _fit_core(train, penalty)
+    # Future-horizon labels from consecutive dates overlap. Retain only one
+    # cross-section per horizon-length block so calibration does not count the
+    # same subsequent market path twenty times for the 20-day model.
+    validation_dates = sorted({sample[0] for sample in validation})
+    calibration_dates = set(validation_dates[::horizon])
+    calibration = [sample for sample in validation if sample[0] in calibration_dates]
+    validation_predictions = [
+        shrinkage * _predict_components(validation_core, sample[1])
+        for sample in calibration
+    ]
     errors = [
-        sample[2] - shrinkage * _predict_components(validation_core, sample[1])
-        for sample in validation
+        sample[2] - prediction
+        for sample, prediction in zip(calibration, validation_predictions)
     ]
     residual_std = max(
         math.sqrt(fmean(error * error for error in errors)), 0.002
@@ -265,7 +288,12 @@ def fit_ridge_model(
         residual_std=residual_std,
         validation_errors=tuple(errors),
         training_samples=len(samples),
-        validation_samples=len(validation),
+        validation_samples=len(calibration),
+        validation_date_blocks=len(calibration_dates),
+        validation_bias=median(errors),
+        validation_dates=tuple(sample[0] for sample in calibration),
+        validation_predictions=tuple(validation_predictions),
+        validation_targets=tuple(sample[2] for sample in calibration),
     )
 
 
@@ -305,6 +333,13 @@ def _empirical_positive_probability(
     return (successes + 1.0) / (len(validation_errors) + 2.0)
 
 
+def _raw_positive_probability(prediction: float, uncertainty: float) -> float:
+    if uncertainty <= 0:
+        return 1.0 if prediction > 0 else 0.0
+    z = prediction / (uncertainty * math.sqrt(2.0))
+    return 0.5 * (1.0 + math.erf(z))
+
+
 def forecast_assets(
     histories: Mapping[str, Sequence[DailyBar]], settings: ForecastSettings
 ) -> Tuple[List[AssetForecast], Dict[str, RidgeModel]]:
@@ -331,8 +366,10 @@ def forecast_assets(
         features = _features(closes, volumes, benchmark_closes, len(dates) - 1)
         raw_5 = models["5d"].predict(features)
         raw_20 = models["20d"].predict(features)
-        expected_5 = settings.shrinkage * raw_5
-        expected_20 = settings.shrinkage * raw_20
+        raw_expected_5 = settings.shrinkage * raw_5
+        raw_expected_20 = settings.shrinkage * raw_20
+        expected_5 = raw_expected_5 + models["5d"].validation_bias
+        expected_20 = raw_expected_20 + models["20d"].validation_bias
         cap = settings.max_abs_forecast_20d
         expected_20 = max(-cap, min(expected_20, cap))
         expected_5 = max(-cap / 2.0, min(expected_5, cap / 2.0))
@@ -357,31 +394,135 @@ def forecast_assets(
                 uncertainty_5d=uncertainty_5,
                 uncertainty_20d=uncertainty_20,
                 signals=signals,
+                raw_expected_excess_return_5d=raw_expected_5,
+                raw_expected_excess_return_20d=raw_expected_20,
+                raw_probability_positive_excess_5d=_raw_positive_probability(
+                    raw_expected_5, uncertainty_5
+                ),
+                raw_probability_positive_excess_20d=_raw_positive_probability(
+                    raw_expected_20, uncertainty_20
+                ),
+                validation_bias_5d=models["5d"].validation_bias,
+                validation_bias_20d=models["20d"].validation_bias,
+                calibration_date_blocks_5d=models["5d"].validation_date_blocks,
+                calibration_date_blocks_20d=models["20d"].validation_date_blocks,
             )
         )
     return forecasts, models
 
 
 def candidate_forecasts(
-    forecasts: Iterable[AssetForecast], settings: ForecastSettings
+    forecasts: Iterable[AssetForecast],
+    settings: ForecastSettings,
+    event_symbols: Iterable[str] = (),
 ) -> List[AssetForecast]:
+    event_set = {symbol.upper() for symbol in event_symbols}
     eligible = [
         forecast
         for forecast in forecasts
-        if forecast.expected_excess_return_20d
-        >= settings.min_expected_excess_return_20d
-        and forecast.probability_positive_excess_20d
-        >= settings.min_probability_positive
+        if (
+            forecast.raw_expected_excess_return_20d
+            >= settings.research_min_raw_expected_excess_return_20d
+            and forecast.raw_probability_positive_excess_20d
+            >= settings.research_min_raw_probability_positive
+        )
+        or forecast.symbol in event_set
     ]
     return sorted(
         eligible,
         key=lambda forecast: (
-            forecast.expected_excess_return_20d
+            forecast.raw_expected_excess_return_20d
             / max(forecast.uncertainty_20d, 1e-9),
-            forecast.expected_excess_return_20d,
+            forecast.raw_expected_excess_return_20d,
         ),
         reverse=True,
-    )[: settings.candidate_count]
+    )[: settings.research_candidate_count]
+
+
+def execution_candidate_forecasts(
+    forecasts: Iterable[AssetForecast], settings: ForecastSettings
+) -> List[AssetForecast]:
+    """Apply only calibrated execution requirements.
+
+    The thresholds remain disabled until a reviewed OOS calibration report is
+    explicitly approved in configuration. Research can continue meanwhile.
+    """
+    if not settings.execution_calibration_approved:
+        return []
+    return [
+        forecast
+        for forecast in forecasts
+        if forecast.calibration_date_blocks_20d
+        >= settings.execution_min_calibration_date_blocks
+        and forecast.expected_excess_return_20d
+        > settings.execution_min_bias_adjusted_excess_return_20d
+        and forecast.probability_positive_excess_20d
+        >= settings.execution_min_calibrated_probability_positive
+    ]
+
+
+def calibration_diagnostics(model: RidgeModel) -> Dict[str, object]:
+    """Summarize non-overlapping OOS performance by adjusted edge ratio."""
+    buckets = (
+        ("<0", float("-inf"), 0.0),
+        ("0-0.05", 0.0, 0.05),
+        ("0.05-0.10", 0.05, 0.10),
+        ("0.10-0.15", 0.10, 0.15),
+        ("0.15-0.25", 0.15, 0.25),
+        (">=0.25", 0.25, float("inf")),
+    )
+    observations = []
+    for date, prediction, target in zip(
+        model.validation_dates,
+        model.validation_predictions,
+        model.validation_targets,
+    ):
+        adjusted = prediction + model.validation_bias
+        observations.append(
+            {
+                "date": date,
+                "adjusted_prediction": adjusted,
+                "target": target,
+                "edge_ratio": adjusted / max(model.residual_std, 1e-9),
+            }
+        )
+    rows = []
+    for label, lower, upper in buckets:
+        chosen = [
+            item
+            for item in observations
+            if lower <= item["edge_ratio"] < upper
+        ]
+        rows.append(
+            {
+                "edge_ratio_bucket": label,
+                "observations": len(chosen),
+                "date_blocks": len({item["date"] for item in chosen}),
+                "mean_bias_adjusted_prediction": (
+                    fmean(item["adjusted_prediction"] for item in chosen)
+                    if chosen
+                    else None
+                ),
+                "mean_realized_excess_return": (
+                    fmean(item["target"] for item in chosen) if chosen else None
+                ),
+                "realized_win_rate": (
+                    fmean(float(item["target"] > 0) for item in chosen)
+                    if chosen
+                    else None
+                ),
+            }
+        )
+    return {
+        "horizon_days": model.horizon,
+        "residual_definition": "realized_minus_shrunk_prediction",
+        "overlap_control": "one_cross_section_per_horizon_date_block",
+        "validation_samples": model.validation_samples,
+        "validation_date_blocks": model.validation_date_blocks,
+        "median_validation_bias": model.validation_bias,
+        "residual_std": model.residual_std,
+        "edge_ratio_buckets": rows,
+    }
 
 
 def infer_market_regime(

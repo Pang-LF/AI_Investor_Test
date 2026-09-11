@@ -45,6 +45,7 @@ def build_decision_email(
     target_weights: Mapping[str, float],
     orders: Sequence[Mapping[str, Any]],
     timings: Mapping[str, float],
+    execution_calibration_approved: bool = True,
     pipeline_error: Optional[str] = None,
 ) -> tuple[str, str]:
     verdicts = {
@@ -77,7 +78,9 @@ def build_decision_email(
         verdict = str(item.get("verdict", "missing_assessment"))
         rationale = str(item.get("concise_rationale", "No LLM rationale returned"))
         target = target_weights.get(forecast.symbol, 0.0)
-        if verdict != "allow":
+        if not execution_calibration_approved:
+            action_reason = "NOT TRADED: execution calibration is not approved"
+        elif verdict != "allow":
             action_reason = f"NOT SELECTED: LLM verdict={verdict}"
         elif target <= 0:
             action_reason = "NOT SELECTED: optimizer assigned zero weight"
@@ -86,10 +89,15 @@ def build_decision_email(
         lines.extend(
             [
                 (
-                    f"- {forecast.symbol}: expected excess 5d="
+                    f"- {forecast.symbol}: raw expected excess 20d="
+                    f"{forecast.raw_expected_excess_return_20d:.2%}, "
+                    f"bias-adjusted expected excess 5d="
                     f"{forecast.expected_excess_return_5d:.2%}, 20d="
                     f"{forecast.expected_excess_return_20d:.2%}, "
-                    f"P(20d>SPY)={forecast.probability_positive_excess_20d:.1%}"
+                    f"raw P={forecast.raw_probability_positive_excess_20d:.1%}, "
+                    f"calibrated P(20d>SPY)="
+                    f"{forecast.probability_positive_excess_20d:.1%}, "
+                    f"calibration blocks={forecast.calibration_date_blocks_20d}"
                 ),
                 f"  {action_reason}",
                 f"  Rationale: {rationale}",
@@ -111,6 +119,11 @@ def build_decision_email(
                 f"latency={research.latency_seconds:.2f}s"
             ),
             "Pipeline timings: " + json.dumps(dict(timings), sort_keys=True),
+            (
+                "Execution calibration: APPROVED"
+                if execution_calibration_approved
+                else "Execution calibration: RESEARCH ONLY; orders blocked"
+            ),
         ]
     )
     if pipeline_error:

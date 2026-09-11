@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ai_investor.config import Settings
+from ai_investor.market_data import DailyBar, HistoricalCache
 from ai_investor.monitor import (
     UniverseCache,
     is_regular_market_window,
@@ -17,7 +18,12 @@ from ai_investor.robinhood_mcp import (
     MONITOR_READ_ONLY_TOOLS,
 )
 from ai_investor.robinhood_readonly import READ_ONLY_TOOLS, WRITE_TOOLS
-from ai_investor.universe import UniverseEntry, _rank_core, assemble_universe
+from ai_investor.universe import (
+    UniverseEntry,
+    _rank_core,
+    assemble_universe,
+    filter_small_candidates_by_median_liquidity,
+)
 
 
 class SafetyTests(unittest.TestCase):
@@ -48,6 +54,7 @@ class SafetyTests(unittest.TestCase):
                 "get_accounts",
                 "get_equity_positions",
                 "get_equity_quotes",
+                "get_equity_historicals",
                 "preview_scan",
             },
         )
@@ -140,6 +147,18 @@ class SafetyTests(unittest.TestCase):
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded["event_candidates"], [])
 
+    def test_historical_cache_is_bound_to_requested_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = HistoricalCache(Path(directory))
+            bars = {
+                "AAA": [
+                    DailyBar("AAA", "2026-09-09T00:00:00Z", 1, 1, 1, 1, 1)
+                ]
+            }
+            cache.save("2026-09-10", ["AAA"], bars, 240)
+            self.assertTrue(cache.load("2026-09-10", ["AAA"], 1, 240))
+            self.assertEqual(cache.load("2026-09-10", ["AAA"], 1, 1095), {})
+
     def test_size_buckets_keep_global_sector_cap_and_dedupe_issuer(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).monitor
 
@@ -172,6 +191,30 @@ class SafetyTests(unittest.TestCase):
             sector_counts[item.sector] = sector_counts.get(item.sector, 0) + 1
         self.assertTrue(all(count <= 5 for count in sector_counts.values()))
 
+    def test_small_cap_recent_reverse_split_is_excluded(self) -> None:
+        class FakeClient:
+            def call_tool(self, _name, arguments):
+                adjustment = arguments["adjustment_type"]
+                bars = []
+                for day in range(1, 26):
+                    adjusted = 10.0
+                    raw = 1.0 if day <= 12 else 10.0
+                    bars.append(
+                        {
+                            "begins_at": f"2026-08-{day:02d}T00:00:00Z",
+                            "close_price": str(adjusted if adjustment == "split" else raw),
+                            "volume": "3000000",
+                            "interpolated": False,
+                        }
+                    )
+                return {"data": {"results": [{"symbol": "REV", "bars": bars}]}}
+
+        settings = Settings.load(Path("config/settings.toml")).monitor
+        result = filter_small_candidates_by_median_liquidity(
+            FakeClient(), [UniverseEntry("REV", "small")], settings, "2026-09-11"
+        )
+        self.assertEqual(result, [])
+
     def test_live_requires_two_matching_switches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "settings.toml"
@@ -187,11 +230,11 @@ class SafetyTests(unittest.TestCase):
                 "notification_required=true\n"
                 "[monitor]\n"
                 "interval_minutes=15\nuniverse_size=60\nquote_batch_size=20\n"
-                "max_mcp_calls_per_cycle=9\nquote_batch_delay_seconds=1.0\n"
+                "max_mcp_calls_per_cycle=13\nquote_batch_delay_seconds=1.0\n"
                 "max_quote_age_minutes=30\n"
                 'market_timezone="America/New_York"\n'
-                "large_target=13\nmid_target=10\nsmall_target=7\n"
-                "event_target=8\nposition_reserve=10\n"
+                "large_target=15\nmid_target=12\nsmall_target=8\n"
+                "event_target=8\nposition_reserve=5\n"
                 "large_min_price=10.0\nlarge_min_market_cap=10000000000\n"
                 "large_min_average_volume=1000000\n"
                 "large_min_average_dollar_volume=100000000\n"
@@ -201,6 +244,9 @@ class SafetyTests(unittest.TestCase):
                 "small_min_price=5.0\nsmall_min_market_cap=500000000\n"
                 "small_max_market_cap=2000000000\nsmall_min_average_volume=500000\n"
                 "small_min_average_dollar_volume=20000000\n"
+                "small_min_float_ratio=0.10\n"
+                "small_median_liquidity_candidate_limit=20\n"
+                "stable_min_ipo_age_calendar_days=252\n"
                 "event_min_market_cap=500000000\n"
                 "event_min_average_volume=500000\n"
                 "event_min_relative_volume=1.25\n"
@@ -208,10 +254,15 @@ class SafetyTests(unittest.TestCase):
                 "general_move_trigger=0.02\nposition_move_trigger=0.01\n"
                 'fixed_etfs=["SPY","QQQ","IWM","RSP","XLK","XLF",'
                 '"XLV","XLY","XLP","XLI","XLE","XLU"]\n'
-                "[forecast]\nhistory_calendar_days=240\nmin_history_bars=100\n"
+                "[forecast]\nhistory_calendar_days=1095\nmin_history_bars=100\n"
                 "ridge_penalty=8\nmin_training_samples=500\nshrinkage=0.35\n"
-                "candidate_count=3\nmin_probability_positive=0.55\n"
-                "min_expected_excess_return_20d=0.005\n"
+                "research_candidate_count=3\n"
+                "research_min_raw_probability_positive=0.48\n"
+                "research_min_raw_expected_excess_return_20d=0.005\n"
+                "execution_calibration_approved=false\n"
+                "execution_min_calibrated_probability_positive=0.50\n"
+                "execution_min_bias_adjusted_excess_return_20d=0.0\n"
+                "execution_min_calibration_date_blocks=5\n"
                 "max_abs_forecast_20d=0.08\n"
                 "[research]\ndeep_candidate_count=1\n"
                 "[portfolio]\nmax_invested_fraction=1.0\n"

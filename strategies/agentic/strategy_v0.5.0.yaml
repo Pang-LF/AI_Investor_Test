@@ -1,0 +1,99 @@
+strategy_id: agentic_single_account
+version: strategy_v0.5.0
+effective_date: 2026-09-11
+owner: system_and_user
+supersedes: strategy_v0.4.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan:
+    initial_usd: 1000
+    month_1_usd: 1000
+    month_2_usd: 1000
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  active_observation_size: 60
+  context_only_etfs: 12
+  investment_stock_capacity: 48
+  target_mix:
+    large_cap: 15
+    mid_cap: 12
+    small_cap: 8
+    dynamic_event: 8
+    current_holding_reserve: 5
+  stable_pool_rules:
+    minimum_ipo_age_calendar_days: 252
+    recent_alpha_used_for_membership: false
+    selection_inputs: [tradability, liquidity, data_quality, sector_diversity]
+  small_cap_rules:
+    market_cap_usd: [500000000, 2000000000]
+    minimum_price_usd: 5
+    minimum_20d_median_dollar_volume_usd: 20000000
+    minimum_float_ratio: 0.10
+    recent_reverse_split_detection: raw_vs_split_adjusted_history
+  dynamic_rules:
+    recent_ipos_allowed_for_research: true
+    sector_cap: 2
+    interleave_breakouts_and_breakdowns: true
+  exclusions_or_flags:
+    stable_pool_excludes: [otc, spac_or_blank_check, explicit_non_regular_trading]
+    llm_risk_review: [recent_reverse_split, delisting_risk, restructuring, corporate_action_anomaly]
+  etfs_are_llm_candidates: false
+
+prediction:
+  model: pooled_beta_ridge_v0.3.0
+  history_calendar_days: 1095
+  horizons_days: [5, 20]
+  market_adjustment: rolling_60_day_beta
+  validation: purged_temporal_split
+  calibration:
+    residual_definition: realized_minus_shrunk_prediction
+    overlapping_label_control: one_cross_section_per_horizon_block
+    expected_return: raw_shrunk_forecast_plus_median_oos_residual
+    probability: empirical_oos_residual_distribution
+
+decision_funnel:
+  level_1_research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    dynamic_event_bypass_for_research: true
+    maximum_new_names: 5
+  level_2_execution:
+    calibration_approved: false
+    rule: New buys remain blocked until an OOS calibration report is reviewed.
+    minimum_calibration_date_blocks: 5
+    provisional_floor_only:
+      bias_adjusted_expected_excess_return_20d: 0.0
+      calibrated_probability_positive: 0.50
+  level_3_portfolio:
+    candidates_compete_with: [current_holdings, other_candidates, cash]
+    cash_is_valid: true
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+  verdicts: [allow_as_no_veto, veto, insufficient_evidence]
+  maximum_llm_calls_per_decision: 1
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-11
+    changed_by: user_and_system
+    reason: Separate research qualification from calibrated execution and improve stock-pool quality.
+    changes:
+      - changed_target_mix_to_15_large_12_mid_8_small_8_event_5_holding_reserve
+      - added_20d_median_dollar_volume_and_float_ratio_for_small_caps
+      - added_stable_pool_ipo_age_otc_spac_and_trading_status_controls
+      - added_event_direction_and_sector_redundancy_controls
+      - added_raw_forecast_bias_correction_and_nonoverlapping_oos_calibration
+      - capped_new_llm_research_candidates_at_five
+      - blocked_new_buys_until_execution_calibration_is_reviewed
+      - clarified_llm_as_veto_reviewer_not_alpha_creator

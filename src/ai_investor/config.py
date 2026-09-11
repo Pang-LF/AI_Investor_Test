@@ -61,6 +61,9 @@ class MonitorSettings:
     small_max_market_cap: int
     small_min_average_volume: int
     small_min_average_dollar_volume: int
+    small_min_float_ratio: float
+    small_median_liquidity_candidate_limit: int
+    stable_min_ipo_age_calendar_days: int
     event_min_market_cap: int
     event_min_average_volume: int
     event_min_relative_volume: float
@@ -98,6 +101,13 @@ class MonitorSettings:
             small_max_market_cap=int(raw["small_max_market_cap"]),
             small_min_average_volume=int(raw["small_min_average_volume"]),
             small_min_average_dollar_volume=int(raw["small_min_average_dollar_volume"]),
+            small_min_float_ratio=float(raw["small_min_float_ratio"]),
+            small_median_liquidity_candidate_limit=int(
+                raw["small_median_liquidity_candidate_limit"]
+            ),
+            stable_min_ipo_age_calendar_days=int(
+                raw["stable_min_ipo_age_calendar_days"]
+            ),
             event_min_market_cap=int(raw["event_min_market_cap"]),
             event_min_average_volume=int(raw["event_min_average_volume"]),
             event_min_relative_volume=float(raw["event_min_relative_volume"]),
@@ -121,7 +131,7 @@ class MonitorSettings:
         ) // self.quote_batch_size
         if required_batches != 3:
             raise RuntimeError("The 60-symbol monitor must use exactly three batches")
-        if self.max_mcp_calls_per_cycle < 9:
+        if self.max_mcp_calls_per_cycle < 13:
             raise RuntimeError("MCP call budget is too small for a full refresh cycle")
         if self.max_quote_age_minutes < self.interval_minutes:
             raise RuntimeError("Quote freshness window must cover at least one interval")
@@ -130,14 +140,16 @@ class MonitorSettings:
         if len(self.fixed_etfs) != 12:
             raise RuntimeError("The confirmed design requires exactly 12 fixed ETFs")
         if (
-            self.large_target
-            + self.mid_target
-            + self.small_target
-            + self.event_target
-            + self.position_reserve
-            != 48
+            self.large_target + self.mid_target + self.small_target
+            + self.event_target + self.position_reserve != 48
         ):
             raise RuntimeError("Dynamic buckets plus position reserve must total 48")
+        if not 0 < self.small_min_float_ratio <= 1:
+            raise RuntimeError("Small-cap float ratio must be in (0, 1]")
+        if not 8 <= self.small_median_liquidity_candidate_limit <= 20:
+            raise RuntimeError("Small-cap eligibility shortlist must be 8-20 names")
+        if self.stable_min_ipo_age_calendar_days < 252:
+            raise RuntimeError("Stable pools require about 180 trading days of history")
         if not (
             self.small_min_market_cap < self.small_max_market_cap
             <= self.mid_min_market_cap < self.mid_max_market_cap
@@ -153,9 +165,13 @@ class ForecastSettings:
     ridge_penalty: float
     min_training_samples: int
     shrinkage: float
-    candidate_count: int
-    min_probability_positive: float
-    min_expected_excess_return_20d: float
+    research_candidate_count: int
+    research_min_raw_probability_positive: float
+    research_min_raw_expected_excess_return_20d: float
+    execution_calibration_approved: bool
+    execution_min_calibrated_probability_positive: float
+    execution_min_bias_adjusted_excess_return_20d: float
+    execution_min_calibration_date_blocks: int
     max_abs_forecast_20d: float
 
     @classmethod
@@ -166,10 +182,24 @@ class ForecastSettings:
             ridge_penalty=float(raw["ridge_penalty"]),
             min_training_samples=int(raw["min_training_samples"]),
             shrinkage=float(raw["shrinkage"]),
-            candidate_count=int(raw["candidate_count"]),
-            min_probability_positive=float(raw["min_probability_positive"]),
-            min_expected_excess_return_20d=float(
-                raw["min_expected_excess_return_20d"]
+            research_candidate_count=int(raw["research_candidate_count"]),
+            research_min_raw_probability_positive=float(
+                raw["research_min_raw_probability_positive"]
+            ),
+            research_min_raw_expected_excess_return_20d=float(
+                raw["research_min_raw_expected_excess_return_20d"]
+            ),
+            execution_calibration_approved=bool(
+                raw["execution_calibration_approved"]
+            ),
+            execution_min_calibrated_probability_positive=float(
+                raw["execution_min_calibrated_probability_positive"]
+            ),
+            execution_min_bias_adjusted_excess_return_20d=float(
+                raw["execution_min_bias_adjusted_excess_return_20d"]
+            ),
+            execution_min_calibration_date_blocks=int(
+                raw["execution_min_calibration_date_blocks"]
             ),
             max_abs_forecast_20d=float(raw["max_abs_forecast_20d"]),
         )
@@ -179,8 +209,14 @@ class ForecastSettings:
             raise RuntimeError("Forecasting requires at least 80 completed daily bars")
         if not 0 < settings.shrinkage <= 1:
             raise RuntimeError("Forecast shrinkage must be in (0, 1]")
-        if settings.candidate_count < 1 or settings.candidate_count > 10:
-            raise RuntimeError("Candidate count must remain between one and ten")
+        if settings.research_candidate_count < 1 or settings.research_candidate_count > 5:
+            raise RuntimeError("Research candidate count must remain between one and five")
+        if not 0 < settings.research_min_raw_probability_positive < 1:
+            raise RuntimeError("Research probability threshold must be in (0, 1)")
+        if not 0 < settings.execution_min_calibrated_probability_positive < 1:
+            raise RuntimeError("Execution probability threshold must be in (0, 1)")
+        if settings.execution_min_calibration_date_blocks < 5:
+            raise RuntimeError("Execution calibration needs at least five non-overlapping blocks")
         return settings
 
 
@@ -406,8 +442,8 @@ class Settings:
             )
         if int(raw["max_llm_calls_per_run"]) != 1:
             raise RuntimeError("Decision runs must use exactly one bounded LLM call")
-        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 12:
-            raise RuntimeError("Research tool budget may not exceed twelve")
+        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 13:
+            raise RuntimeError("Research tool budget may not exceed thirteen")
         if not 1 <= int(raw["max_mcp_calls_per_decision_run"]) <= 50:
             raise RuntimeError("Decision MCP call budget must be between one and fifty")
 

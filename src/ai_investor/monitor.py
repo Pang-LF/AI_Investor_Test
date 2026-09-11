@@ -18,6 +18,7 @@ from .universe import (
     assemble_universe,
     entries_from_json,
     entries_to_json,
+    filter_small_candidates_by_median_liquidity,
     resolve_agentic_account,
     scan_event_candidates,
     scan_large_candidates,
@@ -73,7 +74,7 @@ class UniverseCache:
             return None
         if raw.get("trading_date") != trading_date:
             return None
-        if raw.get("cache_version") != 3:
+        if raw.get("cache_version") != 4:
             return None
         large_candidates = entries_from_json(raw.get("large_candidates", []))
         mid_candidates = entries_from_json(raw.get("mid_candidates", []))
@@ -104,7 +105,7 @@ class UniverseCache:
     ) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "cache_version": 3,
+            "cache_version": 4,
             "trading_date": trading_date,
             "event_bucket": event_bucket,
             "large_candidates": entries_to_json(large_candidates),
@@ -323,13 +324,19 @@ def run_monitor_cycle(
         max_calls=settings.monitor.max_mcp_calls_per_cycle
     ) as client:
         account = resolve_agentic_account(
-            client, max_positions=settings.monitor.position_reserve
+            client, max_positions=settings.risk.max_positions
         )
         cached = cache.load(trading_date)
         if cached is None:
             large_candidates = scan_large_candidates(client, settings.monitor)
             mid_candidates = scan_mid_candidates(client, settings.monitor)
             small_candidates = scan_small_candidates(client, settings.monitor)
+            small_candidates = filter_small_candidates_by_median_liquidity(
+                client,
+                small_candidates,
+                settings.monitor,
+                trading_date,
+            )
             event_candidates = scan_event_candidates(client, settings.monitor)
         else:
             large_candidates = cached["large_candidates"]

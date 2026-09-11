@@ -70,7 +70,11 @@ class HistoricalCache:
         return self.root / f"{decision_date}.json"
 
     def load(
-        self, decision_date: str, symbols: Sequence[str], minimum_bars: int
+        self,
+        decision_date: str,
+        symbols: Sequence[str],
+        minimum_bars: int,
+        history_calendar_days: int,
     ) -> Dict[str, List[DailyBar]]:
         path = self._path(decision_date)
         if not path.exists():
@@ -80,7 +84,11 @@ class HistoricalCache:
         except (OSError, json.JSONDecodeError):
             return {}
         expected = sorted(set(symbols))
-        if raw.get("symbols") != expected or raw.get("schema_version") != 1:
+        if (
+            raw.get("symbols") != expected
+            or raw.get("schema_version") != 2
+            or raw.get("history_calendar_days") != history_calendar_days
+        ):
             return {}
         histories = {
             symbol: [DailyBar(**bar) for bar in bars]
@@ -98,12 +106,14 @@ class HistoricalCache:
         decision_date: str,
         symbols: Sequence[str],
         histories: Mapping[str, Sequence[DailyBar]],
+        history_calendar_days: int,
     ) -> None:
         path = self._path(decision_date)
         path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "decision_date": decision_date,
+            "history_calendar_days": history_calendar_days,
             "ingested_at": datetime.now(timezone.utc).isoformat(),
             "symbols": sorted(set(symbols)),
             "histories": {
@@ -125,11 +135,15 @@ def get_daily_histories(
     minimum_bars: int,
 ) -> Dict[str, List[DailyBar]]:
     unique = sorted(set(str(symbol).upper() for symbol in symbols))
-    cached = cache.load(decision_date, unique, minimum_bars)
+    cached = cache.load(
+        decision_date, unique, minimum_bars, history_calendar_days
+    )
     if cached:
         return cached
 
-    end = datetime.now(timezone.utc)
+    # Anchor the request to the decision date. This keeps replays point-in-time
+    # and prevents a replay from silently requesting a window ending "now".
+    end = datetime.fromisoformat(decision_date).replace(tzinfo=timezone.utc) + timedelta(days=1)
     start = end - timedelta(days=history_calendar_days)
     histories: Dict[str, List[DailyBar]] = {}
     for index in range(0, len(unique), 10):
@@ -146,5 +160,5 @@ def get_daily_histories(
             },
         )
         histories.update(_parse_histories(payload, decision_date))
-    cache.save(decision_date, unique, histories)
+    cache.save(decision_date, unique, histories, history_calendar_days)
     return histories

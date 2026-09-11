@@ -11,13 +11,14 @@ from .robinhood_oauth import MCP_URL, RobinhoodOAuth
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
-# Phase 1 deliberately exposes only the four calls required by the monitor.
+# Phase 1 deliberately exposes only calls required by the monitor.
 # preview_scan is explicitly non-persistent in Robinhood's tool contract.
 MONITOR_READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
     {
         "get_accounts",
         "get_equity_positions",
         "get_equity_quotes",
+        "get_equity_historicals",
         "preview_scan",
     }
 )

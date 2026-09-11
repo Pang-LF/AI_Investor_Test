@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .config import MonitorSettings
@@ -17,6 +19,15 @@ class UniverseEntry:
     sector: str = ""
     investable: bool = True
     issuer: str = ""
+    listing_venue: str = ""
+    trading_status: str = ""
+    ipo_age_calendar_days: int = 0
+    float_shares: float = 0.0
+    float_ratio: float = 0.0
+    average_dollar_volume: float = 0.0
+    median_dollar_volume_20d: float = 0.0
+    eligibility_flags: Tuple[str, ...] = ()
+    event_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,7 +97,7 @@ def resolve_agentic_account(
 
 
 def _common_columns() -> List[Dict[str, Any]]:
-    return [
+    columns = [
         {"display_name": name, "visible": True}
         for name in (
             "Market cap",
@@ -97,6 +108,40 @@ def _common_columns() -> List[Dict[str, Any]]:
             "% Change",
         )
     ]
+    columns.extend(
+        [
+            {
+                "display_name": "Float shares",
+                "expression": "fundamental.sharesFloat",
+                "visible": True,
+            },
+            {
+                "display_name": "Float ratio",
+                "expression": (
+                    "fundamental.sharesFloat / fundamental.sharesOutstanding"
+                ),
+                "visible": True,
+            },
+            {
+                "display_name": "IPO age days",
+                "expression": (
+                    "daysFromNow(fundamental.initialPublicOfferingYmd)"
+                ),
+                "visible": True,
+            },
+            {
+                "display_name": "Listing venue",
+                "expression": "officialPlaceOfListing",
+                "visible": True,
+            },
+            {
+                "display_name": "Trading status",
+                "expression": "tradingStatus",
+                "visible": True,
+            },
+        ]
+    )
+    return columns
 
 
 def _size_rows(
@@ -106,6 +151,8 @@ def _size_rows(
     maximum_market_cap: Optional[int],
     minimum_price: float,
     minimum_average_volume: int,
+    minimum_ipo_age_calendar_days: int,
+    minimum_float_ratio: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     market_cap_filter = {
         "filter_type": "FILTER_TYPE_MARKET_CAP",
@@ -135,12 +182,39 @@ def _size_rows(
             "interval": "1d",
             "length": 30,
         },
+        {
+            # Robinhood's daysFromNow is negative for dates in the past.
+            "expression": "daysFromNow(fundamental.initialPublicOfferingYmd)",
+            "predicate": "<=",
+            "values": [str(-minimum_ipo_age_calendar_days)],
+            "display_title": "IPO age days",
+        },
     ]
+    if minimum_float_ratio is not None:
+        filters.append(
+            {
+                "expression": (
+                    "fundamental.sharesFloat / fundamental.sharesOutstanding"
+                ),
+                "predicate": ">=",
+                "values": [str(minimum_float_ratio)],
+                "display_title": "Float ratio",
+            }
+        )
+    # A filter-created expression is already a result column. Supplying the
+    # same expression a second time is rejected by Robinhood.
+    duplicate_columns = {"IPO age days"}
+    if minimum_float_ratio is not None:
+        duplicate_columns.add("Float ratio")
     payload = client.call_tool(
         "preview_scan",
         {
             "filters": filters,
-            "columns": _common_columns(),
+            "columns": [
+                column
+                for column in _common_columns()
+                if column["display_name"] not in duplicate_columns
+            ],
         },
     )
     return _rows(payload)
@@ -204,6 +278,11 @@ def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
     market_cap = _number(columns.get("Market cap"))
     change = _number(columns.get("% Change"))
     relative_volume = _number(columns.get("Relative volume"))
+    ipo_delta = int(_number(columns.get("IPO age days")))
+    listing_venue = str(columns.get("Listing venue", ""))
+    trading_status = str(columns.get("Trading status", ""))
+    float_shares = _number(columns.get("Float shares"))
+    float_ratio = _number(columns.get("Float ratio"))
     completeness_fields = (
         columns.get("Last"),
         columns.get("Average volume"),
@@ -221,6 +300,11 @@ def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
         "market_cap": market_cap,
         "change": change,
         "relative_volume": relative_volume,
+        "ipo_age_calendar_days": abs(ipo_delta) if ipo_delta < 0 else 0,
+        "listing_venue": listing_venue,
+        "trading_status": trading_status,
+        "float_shares": float_shares,
+        "float_ratio": float_ratio,
         "completeness": sum(
             value is not None and str(value).strip() != ""
             for value in completeness_fields
@@ -245,7 +329,11 @@ def _rank_core(
     metrics = [
         metric
         for metric in (_row_metrics(row) for row in rows)
-        if metric["symbol"] and metric["dollar_volume"] >= min_dollar_volume
+        if metric["symbol"]
+        and metric["dollar_volume"] >= min_dollar_volume
+        and not _is_otc_venue(metric["listing_venue"])
+        and _is_regular_trading_status(metric["trading_status"])
+        and not _looks_like_spac(metric["issuer"])
     ]
     liquidities = [math.log1p(metric["dollar_volume"]) for metric in metrics]
     ranked = []
@@ -261,6 +349,12 @@ def _rank_core(
                 score=round(score, 8),
                 sector=metric["sector"],
                 issuer=metric["issuer"],
+                listing_venue=metric["listing_venue"],
+                trading_status=metric["trading_status"],
+                ipo_age_calendar_days=metric["ipo_age_calendar_days"],
+                float_shares=metric["float_shares"],
+                float_ratio=metric["float_ratio"],
+                average_dollar_volume=metric["dollar_volume"],
             )
         )
     return sorted(ranked, key=lambda entry: (-entry.score, entry.symbol))
@@ -272,10 +366,20 @@ def _rank_events(rows: Iterable[Dict[str, Any]]) -> List[UniverseEntry]:
         metric = _row_metrics(row)
         if not metric["symbol"]:
             continue
+        if _is_otc_venue(metric["listing_venue"]):
+            continue
+        flags = []
+        if not _is_regular_trading_status(metric["trading_status"]):
+            flags.append("non_regular_trading_status")
+        if _looks_like_spac(metric["issuer"]):
+            flags.append("spac_or_blank_check")
+        if 0 < metric["ipo_age_calendar_days"] < 252:
+            flags.append("recent_ipo")
         score = (
             abs(metric["change"])
             * max(metric["relative_volume"], 0.0)
             * math.log1p(max(metric["dollar_volume"], 0.0))
+            * (0.5 + 0.5 * metric["completeness"])
         )
         ranked.append(
             UniverseEntry(
@@ -284,9 +388,36 @@ def _rank_events(rows: Iterable[Dict[str, Any]]) -> List[UniverseEntry]:
                 score=round(score, 8),
                 sector=metric["sector"],
                 issuer=metric["issuer"],
+                listing_venue=metric["listing_venue"],
+                trading_status=metric["trading_status"],
+                ipo_age_calendar_days=metric["ipo_age_calendar_days"],
+                float_shares=metric["float_shares"],
+                float_ratio=metric["float_ratio"],
+                average_dollar_volume=metric["dollar_volume"],
+                eligibility_flags=tuple(flags),
+                event_type=("breakout" if metric["change"] > 0 else "breakdown"),
             )
         )
     return sorted(ranked, key=lambda entry: (-entry.score, entry.symbol))
+
+
+OTC_VENUES = frozenset({"OOTC", "OTCB", "OTCQ", "OTCM", "PINX"})
+
+
+def _is_otc_venue(value: str) -> bool:
+    return value.upper().strip() in OTC_VENUES
+
+
+def _is_regular_trading_status(value: str) -> bool:
+    # Missing status is recorded for downstream review rather than silently
+    # excluding otherwise valid companies. Explicit halts/restrictions fail.
+    normalized = value.lower().strip()
+    return not normalized or normalized == "regular"
+
+
+def _looks_like_spac(issuer: str) -> bool:
+    normalized = issuer.upper()
+    return bool(re.search(r"\b(SPAC|BLANK CHECK|ACQUISITION CORP(?:ORATION)?)\b", normalized))
 
 
 ISSUER_ALIASES = {
@@ -349,6 +480,24 @@ def _take_with_sector_cap(
     return selected
 
 
+def _interleave_event_directions(
+    candidates: Sequence[UniverseEntry],
+) -> List[UniverseEntry]:
+    groups = {
+        "breakout": [item for item in candidates if item.event_type == "breakout"],
+        "breakdown": [item for item in candidates if item.event_type == "breakdown"],
+    }
+    remainder = [
+        item for item in candidates if item.event_type not in groups
+    ]
+    interleaved: List[UniverseEntry] = []
+    for index in range(max(len(groups["breakout"]), len(groups["breakdown"]))):
+        for name in ("breakout", "breakdown"):
+            if index < len(groups[name]):
+                interleaved.append(groups[name][index])
+    return interleaved + remainder
+
+
 def scan_large_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
@@ -360,6 +509,7 @@ def scan_large_candidates(
             maximum_market_cap=None,
             minimum_price=settings.large_min_price,
             minimum_average_volume=settings.large_min_average_volume,
+            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
         ),
         settings.large_min_average_dollar_volume,
         "large",
@@ -377,6 +527,7 @@ def scan_mid_candidates(
             maximum_market_cap=settings.mid_max_market_cap,
             minimum_price=settings.mid_min_price,
             minimum_average_volume=settings.mid_min_average_volume,
+            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
         ),
         settings.mid_min_average_dollar_volume,
         "mid",
@@ -394,6 +545,8 @@ def scan_small_candidates(
             maximum_market_cap=settings.small_max_market_cap,
             minimum_price=settings.small_min_price,
             minimum_average_volume=settings.small_min_average_volume,
+            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
+            minimum_float_ratio=settings.small_min_float_ratio,
         ),
         settings.small_min_average_dollar_volume,
         "small",
@@ -405,6 +558,116 @@ def scan_event_candidates(
     settings: MonitorSettings,
 ) -> List[UniverseEntry]:
     return _rank_events(_event_rows(client, settings))
+
+
+def filter_small_candidates_by_median_liquidity(
+    client: RobinhoodReadOnlyMCPClient,
+    candidates: Sequence[UniverseEntry],
+    settings: MonitorSettings,
+    decision_date: str,
+) -> List[UniverseEntry]:
+    """Enforce 20 completed-day median dollar volume on a bounded shortlist.
+
+    Robinhood's scanner exposes historical average turnover but no median.
+    Pulling split-adjusted and raw completed daily bars for at most 20
+    prefiltered names makes both the robust liquidity rule and recent reverse-
+    split check auditable without expanding the recurring quote loop.
+    """
+    chosen = list(candidates[: settings.small_median_liquidity_candidate_limit])
+    if not chosen:
+        return []
+    end = datetime.fromisoformat(decision_date).replace(tzinfo=timezone.utc)
+    start = end - timedelta(days=120)
+    median_by_symbol: Dict[str, float] = {}
+    split_close_by_symbol: Dict[str, Dict[str, float]] = {}
+    for index in range(0, len(chosen), 10):
+        batch = chosen[index : index + 10]
+        payload = client.call_tool(
+            "get_equity_historicals",
+            {
+                "symbols": [item.symbol for item in batch],
+                "start_time": start.isoformat().replace("+00:00", "Z"),
+                "end_time": end.isoformat().replace("+00:00", "Z"),
+                "interval": "day",
+                "bounds": "regular",
+                "adjustment_type": "split",
+            },
+        )
+        results = ((payload.get("data") or {}).get("results") or [])
+        for result in results:
+            symbol = str(result.get("symbol") or "").upper()
+            dollar_volumes = []
+            split_closes: Dict[str, float] = {}
+            for bar in result.get("bars") or []:
+                begins_at = str(bar.get("begins_at") or "")
+                if not begins_at or begins_at[:10] >= decision_date:
+                    continue
+                if bar.get("interpolated") is True:
+                    continue
+                close = _number(bar.get("close_price"))
+                volume = _number(bar.get("volume"))
+                if close > 0 and volume >= 0:
+                    dollar_volumes.append(close * volume)
+                    split_closes[begins_at[:10]] = close
+            if len(dollar_volumes) >= 20:
+                median_by_symbol[symbol] = median(dollar_volumes[-20:])
+                split_close_by_symbol[symbol] = split_closes
+    liquidity_pass = [
+        candidate
+        for candidate in chosen
+        if median_by_symbol.get(candidate.symbol, 0.0)
+        >= settings.small_min_average_dollar_volume
+    ]
+    raw_close_by_symbol: Dict[str, Dict[str, float]] = {}
+    for index in range(0, len(liquidity_pass), 10):
+        batch = liquidity_pass[index : index + 10]
+        payload = client.call_tool(
+            "get_equity_historicals",
+            {
+                "symbols": [item.symbol for item in batch],
+                "start_time": start.isoformat().replace("+00:00", "Z"),
+                "end_time": end.isoformat().replace("+00:00", "Z"),
+                "interval": "day",
+                "bounds": "regular",
+                "adjustment_type": "none",
+            },
+        )
+        for result in ((payload.get("data") or {}).get("results") or []):
+            symbol = str(result.get("symbol") or "").upper()
+            raw_closes = {}
+            for bar in result.get("bars") or []:
+                begins_at = str(bar.get("begins_at") or "")
+                if not begins_at or begins_at[:10] >= decision_date:
+                    continue
+                close = _number(bar.get("close_price"))
+                if close > 0 and bar.get("interpolated") is not True:
+                    raw_closes[begins_at[:10]] = close
+            raw_close_by_symbol[symbol] = raw_closes
+
+    def recent_reverse_split(symbol: str) -> bool:
+        adjusted = split_close_by_symbol.get(symbol) or {}
+        raw = raw_close_by_symbol.get(symbol) or {}
+        dates = sorted(set(adjusted) & set(raw))
+        if len(dates) < 20:
+            return True  # Incomplete corporate-action comparison fails closed.
+        ratios = [raw[date] / adjusted[date] for date in dates if adjusted[date] > 0]
+        return any(
+            previous > 0 and current / previous >= 1.5
+            for previous, current in zip(ratios, ratios[1:])
+        )
+
+    return [
+        UniverseEntry(
+            **{
+                **asdict(candidate),
+                "median_dollar_volume_20d": round(
+                    median_by_symbol.get(candidate.symbol, 0.0), 2
+                ),
+            }
+        )
+        for candidate in liquidity_pass
+        if not recent_reverse_split(candidate.symbol)
+    ]
 
 
 def assemble_universe(
@@ -436,8 +699,8 @@ def assemble_universe(
                 issuer=context.issuer if context else "",
             )
         )
-    if len(positions) > settings.position_reserve:
-        raise MCPError("Position count exceeds the configured reserve")
+    if len(positions) > settings.universe_size - len(settings.fixed_etfs):
+        raise MCPError("Positions leave no capacity for the investment universe")
 
     excluded = {entry.symbol for entry in positions}
     issuer_excluded = {
@@ -459,9 +722,10 @@ def assemble_universe(
 
     # Opportunity buckets receive slots before large caps so mega-cap names
     # cannot consume the global sector allowance by themselves.
+    available_stock_slots = settings.universe_size - len(fixed) - len(positions)
     events = _take_with_sector_cap(
-        event_candidates,
-        settings.event_target,
+        _interleave_event_directions(event_candidates),
+        min(settings.event_target, available_stock_slots),
         excluded,
         sector_cap=2,
         issuer_excluded=issuer_excluded,
@@ -469,7 +733,7 @@ def assemble_universe(
     )
     small = _take_with_sector_cap(
         small_candidates,
-        settings.small_target,
+        min(settings.small_target, max(0, available_stock_slots - len(events))),
         excluded,
         sector_cap=2,
         issuer_excluded=issuer_excluded,
@@ -477,7 +741,10 @@ def assemble_universe(
     )
     mid = _take_with_sector_cap(
         mid_candidates,
-        settings.mid_target,
+        min(
+            settings.mid_target,
+            max(0, available_stock_slots - len(events) - len(small)),
+        ),
         excluded,
         sector_cap=3,
         issuer_excluded=issuer_excluded,
@@ -485,7 +752,10 @@ def assemble_universe(
     )
     large = _take_with_sector_cap(
         large_candidates,
-        settings.large_target,
+        min(
+            settings.large_target,
+            max(0, available_stock_slots - len(events) - len(small) - len(mid)),
+        ),
         excluded,
         sector_cap=5,
         issuer_excluded=issuer_excluded,

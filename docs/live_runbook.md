@@ -35,10 +35,11 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
-No daily terminal command is required after this. The scheduler still exits
-without an order unless there is a scheduled decision window or deterministic
-market trigger, a quantitative candidate, an LLM `allow`, a valid optimizer
-target, and passing order review plus hard-risk approval.
+No daily terminal command is required after this. Strategy v0.5.0 currently has
+`execution_calibration_approved = false`: monitoring, forecasts, LLM review,
+logging, and email can run, but no new order is generated until an OOS
+calibration report is reviewed and that strategy-layer switch is explicitly
+changed. Persistent LIVE authorization alone cannot bypass this gate.
 
 The authorization permits investment-strategy version changes but is invalidated
 by an Agentic-account change, a hard-risk policy-version change, a change to any

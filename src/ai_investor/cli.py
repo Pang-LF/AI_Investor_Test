@@ -235,6 +235,12 @@ def main() -> None:
                 "authorization_mode": "persistent",
                 "account": "••••" + state.account_number[-4:],
                 "risk_policy_version": settings.risk.policy_version,
+                "execution_calibration_approved": (
+                    settings.forecast.execution_calibration_approved
+                ),
+                "new_order_generation_enabled": (
+                    settings.forecast.execution_calibration_approved
+                ),
             }
         except Exception as exc:
             payload = {

@@ -19,7 +19,13 @@ from .execution import (
     plan_orders,
     reconcile_orders,
 )
-from .forecasting import candidate_forecasts, forecast_assets, infer_market_regime
+from .forecasting import (
+    calibration_diagnostics,
+    candidate_forecasts,
+    execution_candidate_forecasts,
+    forecast_assets,
+    infer_market_regime,
+)
 from .health import clear_operational_failures, report_operational_failure
 from .ledger import Ledger
 from .market_data import HistoricalCache, get_daily_histories
@@ -30,7 +36,7 @@ from .notification import (
     require_email_configuration,
     send_or_queue,
 )
-from .portfolio import optimize_portfolio
+from .portfolio import TargetPortfolio, optimize_portfolio
 from .research import allowed_symbols, analyze_candidates, collect_research
 from .robinhood_mcp import RobinhoodMCPClient
 
@@ -199,7 +205,14 @@ def run_agent_cycle(
                 if symbol == "SPY" or symbol in investable_symbols
             }
             forecasts, models = forecast_assets(forecast_histories, settings.forecast)
-            candidates = candidate_forecasts(forecasts, settings.forecast)
+            event_symbols = {
+                str(item.get("symbol", "")).upper()
+                for item in entries
+                if item.get("bucket") == "event" and item.get("symbol")
+            }
+            candidates = candidate_forecasts(
+                forecasts, settings.forecast, event_symbols=event_symbols
+            )
             timings["history_and_forecast_seconds"] = round(
                 time.monotonic() - forecast_started, 3
             )
@@ -252,7 +265,7 @@ def run_agent_cycle(
                     detail=str(exc),
                 )
             research_started = time.monotonic()
-            expected_research_calls = 2 + 2 * min(
+            expected_research_calls = 3 + 2 * min(
                 len(research_set), settings.research.deep_candidate_count
             )
             if expected_research_calls > settings.max_tool_calls_per_run:
@@ -263,7 +276,14 @@ def run_agent_cycle(
                 client,
                 [item.symbol for item in research_set],
                 settings.research.deep_candidate_count,
+                account_number=state.account_number,
             )
+            research_symbols = {item.symbol for item in research_set}
+            research_payload["universe_eligibility"] = [
+                item
+                for item in entries
+                if str(item.get("symbol", "")).upper() in research_symbols
+            ]
             timings["research_tools_seconds"] = round(
                 time.monotonic() - research_started, 3
             )
@@ -307,15 +327,36 @@ def run_agent_cycle(
                 )
             timings["llm_seconds"] = round(research.latency_seconds, 3)
             allowed = allowed_symbols(research)
-            eligible = [item for item in research_set if item.symbol in allowed]
+            llm_reviewed = [
+                item for item in research_set if item.symbol in allowed
+            ]
+            eligible = execution_candidate_forecasts(
+                llm_reviewed, settings.forecast
+            )
             sectors = {
                 str(item.get("symbol", "")).upper(): str(item.get("sector", ""))
                 for item in entries
                 if item.get("symbol")
             }
-            target = optimize_portfolio(
-                eligible, histories, settings.portfolio, settings.risk, sectors
-            )
+            if settings.forecast.execution_calibration_approved:
+                target = optimize_portfolio(
+                    eligible, histories, settings.portfolio, settings.risk, sectors
+                )
+            else:
+                # Research-only calibration mode must never liquidate existing
+                # positions as a side effect of withholding unapproved buys.
+                current_weights = {
+                    position.symbol: position.market_value / state.portfolio_value
+                    for position in state.positions
+                    if state.portfolio_value > 0 and position.market_value > 0
+                }
+                target = TargetPortfolio(
+                    weights=current_weights,
+                    cash_weight=max(0.0, state.cash / state.portfolio_value)
+                    if state.portfolio_value > 0
+                    else 1.0,
+                    objective_value=0.0,
+                )
             monitor_quotes = _quote_map(monitor_payload)
             prices = {symbol: float(item.get("last_trade_price") or 0) for symbol, item in monitor_quotes.items()}
             orders = plan_orders(
@@ -362,6 +403,9 @@ def run_agent_cycle(
                 target_weights=target.weights,
                 orders=outcomes,
                 timings=timings,
+                execution_calibration_approved=(
+                    settings.forecast.execution_calibration_approved
+                ),
             )
             delivery = send_or_queue(
                 root,
@@ -378,6 +422,14 @@ def run_agent_cycle(
                 "intraday_market_summary": monitor_payload.get("market_summary") or {},
                 "current_positions": [asdict(item) for item in state.positions],
                 "candidate_stocks": [item.to_dict() for item in research_set],
+                "execution_calibration_approved": (
+                    settings.forecast.execution_calibration_approved
+                ),
+                "execution_eligible_stocks": [item.symbol for item in eligible],
+                "model_calibration": {
+                    key: calibration_diagnostics(model)
+                    for key, model in models.items()
+                },
                 "excluded_short_history": missing_history,
                 "reasoning_summary": research.assessment,
                 "target_portfolio": target.to_dict(), "orders": outcomes,

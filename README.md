@@ -25,7 +25,7 @@ Every 15 minutes during regular US market hours:
    15:30 ET, or on a deterministic move trigger, with at most three per day.
 3. A pooled, regularized model estimates 5- and 20-day rolling-beta-adjusted
    returns from prior completed daily bars using purged temporal validation.
-4. Up to ten quantitative candidates/current holdings receive one structured
+4. Up to five new research candidates plus current holdings receive one structured
    GPT-5.6 Terra research call. All receive fundamentals and financials; the top
    five receive earnings and news. The LLM can allow or veto; it cannot size an order.
 5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
@@ -36,7 +36,7 @@ Every 15 minutes during regular US market hours:
    before placement; later cycles reconcile broker order states into SQLite.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.4.0.yaml`](strategies/agentic/strategy_v0.4.0.yaml).
+[`strategies/agentic/strategy_v0.5.0.yaml`](strategies/agentic/strategy_v0.5.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -46,8 +46,8 @@ The full implemented data and decision flow is documented in
 - One LLM call per decision; no LLM call on ordinary 15-minute monitor cycles.
 - Maximum 40,000 input and 2,400 output tokens.
 - Maximum $0.15 per call and $8 total LLM spend per month.
-- Twelve public-research calls and 50 total Robinhood MCP calls per decision run.
-- The earlier three-name Luna integration call cost about $0.0032; Terra/ten-name
+- Thirteen public-research calls and 50 total Robinhood MCP calls per decision run.
+- The earlier three-name Luna integration call cost about $0.0032; Terra/five-name
   runs will cost more and are measured individually in the ledger and email.
 
 ## Commands
