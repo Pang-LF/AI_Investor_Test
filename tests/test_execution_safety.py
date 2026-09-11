@@ -14,6 +14,8 @@ from ai_investor.execution import (
     deterministic_ref_id,
     plan_orders,
     execute_orders,
+    fetch_broker_state,
+    reconcile_orders,
 )
 from ai_investor.config import Settings
 from ai_investor.forecasting import AssetForecast
@@ -214,6 +216,84 @@ class ExecutionSafetyTests(unittest.TestCase):
                 row = ledger.get_order("same")
                 self.assertEqual(row["status"], "submitted")
                 self.assertEqual(ledger.daily_order_count("2026-01-01"), 1)
+
+    def test_fetch_broker_state_values_positions_with_quotes(self) -> None:
+        class FakeClient:
+            def call_tool(self, name, arguments):
+                if name == "get_accounts":
+                    return {"data": {"accounts": [{
+                        "agentic_allowed": True, "state": "active",
+                        "account_number": "account",
+                    }]}}
+                if name == "get_portfolio":
+                    return {"data": {"total_value": "1000", "cash": "950"}}
+                if name == "get_equity_positions":
+                    return {"data": {"positions": [{
+                        "symbol": "AAA", "quantity": "0.5",
+                        "shares_available_for_sells": "0.4",
+                    }]}}
+                if name == "get_equity_quotes":
+                    return {"data": {"results": [{"quote": {
+                        "symbol": "AAA", "last_trade_price": "100",
+                    }}]}}
+                raise AssertionError(name)
+
+        state = fetch_broker_state(FakeClient())
+        self.assertEqual(state.positions[0].market_value, 50.0)
+        self.assertEqual(state.positions[0].sellable_quantity, 0.4)
+
+    def test_nested_placement_id_is_stored_and_reconciled(self) -> None:
+        class FakeClient:
+            def __init__(self):
+                self.placed = False
+
+            def call_tool(self, name, arguments):
+                if name == "review_equity_order":
+                    return {"data": {"order_checks": {}}}
+                if name == "place_equity_order":
+                    self.placed = True
+                    return {"data": {"order": {
+                        "id": "broker-1", "state": "unconfirmed",
+                    }}}
+                if name == "get_equity_orders":
+                    return {"data": {"orders": [{
+                        "id": "broker-1", "symbol": "AAA", "side": "buy",
+                        "state": "filled", "cumulative_quantity": "0.5",
+                        "average_price": "100",
+                    }]}}
+                raise AssertionError(name)
+
+        settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        now = datetime.now(timezone.utc)
+        state = BrokerState("account", 1000, 1000, 0, 0, 0, ())
+        order = plan_orders(
+            decision_key="live", target_weights={"AAA": 0.05}, state=state,
+            prices={"AAA": 100}, minimum_trade_usd=10,
+        )[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_live(root, "account", settings)
+            with Ledger(root / "ledger.sqlite") as ledger:
+                client = FakeClient()
+                result = execute_orders(
+                    settings=settings, root=root, ledger=ledger, client=client,
+                    state=state, orders=[order], quotes={"AAA": {
+                        "last_trade_price": 100, "bid_price": 99.9,
+                        "ask_price": 100.1, "venue_last_trade_time": now.isoformat(),
+                    }}, tradability={"AAA": True}, trading_date="2026-01-01",
+                    now=now, allowed_buy_symbols={"AAA"},
+                )
+                self.assertEqual(result[0]["broker_order_id"], "broker-1")
+                filled_state = BrokerState(
+                    "account", 1000, 950, 0, 0, 0,
+                    (Position("AAA", 0.5, 50),),
+                )
+                self.assertEqual(
+                    reconcile_orders(client, ledger, filled_state, "2026-01-01"), 1
+                )
+                row = ledger.get_order(order.ref_id)
+                self.assertEqual(row["status"], "filled")
+                self.assertEqual(row["average_fill_price"], 100.0)
 
     def test_optimizer_respects_full_nav_and_position_caps(self) -> None:
         base = datetime(2026, 1, 1, tzinfo=timezone.utc)

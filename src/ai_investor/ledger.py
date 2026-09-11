@@ -93,6 +93,25 @@ class Ledger:
             self.connection.execute("ALTER TABLE orders ADD COLUMN filled_quantity REAL")
         if "average_fill_price" not in columns:
             self.connection.execute("ALTER TABLE orders ADD COLUMN average_fill_price REAL")
+        # Robinhood's placement response nests the order at data.order. Older
+        # builds stored the full response but missed its id; repair those rows
+        # so subsequent get_equity_orders responses can be matched safely.
+        rows = self.connection.execute(
+            "SELECT ref_id, response_json FROM orders WHERE broker_order_id IS NULL"
+        ).fetchall()
+        for row in rows:
+            try:
+                payload = json.loads(row["response_json"])
+                data = payload.get("data") or {}
+                order = data.get("order") or data
+                broker_order_id = order.get("id") or order.get("order_id")
+            except (AttributeError, json.JSONDecodeError, TypeError):
+                broker_order_id = None
+            if broker_order_id:
+                self.connection.execute(
+                    "UPDATE orders SET broker_order_id=? WHERE ref_id=?",
+                    (str(broker_order_id), row["ref_id"]),
+                )
         self.connection.commit()
 
     @staticmethod
@@ -245,6 +264,12 @@ class Ledger:
     def get_order(self, ref_id: str) -> Optional[Dict[str, Any]]:
         row = self.connection.execute(
             "SELECT * FROM orders WHERE ref_id=?", (ref_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_order_by_broker_id(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
+        row = self.connection.execute(
+            "SELECT * FROM orders WHERE broker_order_id=?", (broker_order_id,)
         ).fetchone()
         return dict(row) if row else None
 

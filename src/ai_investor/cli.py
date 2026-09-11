@@ -207,7 +207,7 @@ def main() -> None:
         if args.ack != "I ACCEPT LIVE TRADING RISK":
             raise RuntimeError("Exact live-risk acknowledgement is required")
         with RobinhoodMCPClient(
-            max_calls=3,
+            max_calls=4,
             allowed_tools=execution_toolset(False),
             allow_order_submission=False,
         ) as client:
@@ -224,7 +224,7 @@ def main() -> None:
     elif args.command == "live-status":
         try:
             with RobinhoodMCPClient(
-                max_calls=3,
+                max_calls=4,
                 allowed_tools=execution_toolset(False),
                 allow_order_submission=False,
             ) as client:

@@ -28,6 +28,7 @@ class Position:
     symbol: str
     quantity: float
     market_value: float
+    sellable_quantity: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -173,7 +174,14 @@ def plan_orders(
             price = prices.get(symbol, 0.0)
             if price <= 0:
                 continue
-            held = next((item.quantity for item in state.positions if item.symbol == symbol), 0.0)
+            position = next(
+                (item for item in state.positions if item.symbol == symbol), None
+            )
+            held = (
+                position.sellable_quantity
+                if position is not None and position.sellable_quantity is not None
+                else position.quantity if position is not None else 0.0
+            )
             quantity = min(held, notional / price)
             notional = round(quantity * price, 2)
         orders.append(
@@ -202,11 +210,41 @@ def fetch_broker_state(client: RobinhoodMCPClient) -> BrokerState:
     number = str(eligible[0]["account_number"])
     portfolio = _data(client.call_tool("get_portfolio", {"account_number": number}))
     positions_raw = list(_data(client.call_tool("get_equity_positions", {"account_number": number})).get("positions") or [])
+    position_symbols = [
+        str(item.get("symbol", "")).upper()
+        for item in positions_raw
+        if item.get("symbol") and _number(item.get("quantity")) > 0
+    ]
+    position_prices: Dict[str, float] = {}
+    if position_symbols:
+        quote_payload = client.call_tool(
+            "get_equity_quotes", {"symbols": position_symbols}
+        )
+        for item in list(_data(quote_payload).get("results") or []):
+            quote = item.get("quote") or item
+            symbol = str(quote.get("symbol", "")).upper()
+            price = _number(
+                quote.get("last_trade_price")
+                or quote.get("mark_price")
+                or quote.get("price")
+            )
+            if symbol and price > 0:
+                position_prices[symbol] = price
+        missing_prices = sorted(set(position_symbols) - set(position_prices))
+        if missing_prices:
+            raise RuntimeError(
+                "Cannot value current positions without fresh quotes: "
+                + ", ".join(missing_prices)
+            )
     positions = tuple(
         Position(
             symbol=str(item.get("symbol", "")).upper(),
             quantity=_number(item.get("quantity")),
-            market_value=_number(item.get("market_value") or item.get("equity_value") or item.get("quantity")) * (1.0 if item.get("market_value") or item.get("equity_value") else _number(item.get("price") or item.get("last_price"))),
+            market_value=(
+                _number(item.get("quantity"))
+                * position_prices[str(item.get("symbol", "")).upper()]
+            ),
+            sellable_quantity=_number(item.get("shares_available_for_sells")),
         )
         for item in positions_raw
         if item.get("symbol") and _number(item.get("quantity")) > 0
@@ -322,7 +360,10 @@ def execute_orders(
         placement_arguments["ref_id"] = order.ref_id
         placed = client.call_tool("place_equity_order", placement_arguments)
         placed_data = _data(placed)
-        broker_id = str(placed_data.get("id") or placed_data.get("order_id") or "") or None
+        placed_order = placed_data.get("order") or placed_data
+        broker_id = str(
+            placed_order.get("id") or placed_order.get("order_id") or ""
+        ) or None
         ledger.upsert_order(
             ref_id=order.ref_id, decision_key=order.decision_key, trading_date=trading_date,
             mode=settings.mode, symbol=order.symbol, side=order.side,
@@ -343,9 +384,13 @@ def reconcile_orders(client: RobinhoodMCPClient, ledger: Ledger, state: BrokerSt
     changed = 0
     for row in rows:
         ref_id = str(row.get("ref_id") or row.get("client_order_id") or "")
+        broker_id = str(row.get("id") or row.get("order_id") or "")
         existing = ledger.get_order(ref_id) if ref_id else None
+        if existing is None and broker_id:
+            existing = ledger.get_order_by_broker_id(broker_id)
         if not existing:
             continue
+        ref_id = str(existing["ref_id"])
         status = str(row.get("state") or row.get("status") or existing["status"]).lower()
         filled_quantity = _number(
             row.get("cumulative_quantity")
@@ -369,7 +414,8 @@ def reconcile_orders(client: RobinhoodMCPClient, ledger: Ledger, state: BrokerSt
             mode=existing["mode"], symbol=existing["symbol"], side=existing["side"],
             order_type=existing["order_type"], quantity=existing["quantity"],
             dollar_amount=existing["dollar_amount"], planned_notional=existing["planned_notional"],
-            status=status, broker_order_id=str(row.get("id") or existing["broker_order_id"] or "") or None,
+            status=status,
+            broker_order_id=broker_id or existing["broker_order_id"] or None,
             filled_quantity=filled_quantity or None,
             average_fill_price=average_fill_price or None,
             response=dict(row),
