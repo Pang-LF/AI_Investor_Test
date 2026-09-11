@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .execution import account_fingerprint
 from .robinhood_mcp import RobinhoodReadOnlyMCPClient
+from .time_utils import parse_rfc3339
 from .universe import (
     UniverseEntry,
     assemble_universe,
@@ -156,7 +157,7 @@ def quotes_are_fresh(
         if not raw:
             return False
         try:
-            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            parsed = parse_rfc3339(raw)
         except ValueError:
             return False
         if parsed.tzinfo is None:

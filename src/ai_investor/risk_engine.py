@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Dict, Mapping, Optional, Sequence
 
 from .config import RiskSettings
+from .time_utils import parse_rfc3339
 
 
 LEVERAGED_OR_INVERSE_ETFS = frozenset(
@@ -85,7 +86,7 @@ def approve_order(
         reasons.append("spread_limit")
     raw_time = quote.get("last_trade_time") or quote.get("venue_last_trade_time")
     try:
-        quote_time = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+        quote_time = parse_rfc3339(raw_time)
         if quote_time.tzinfo is None:
             quote_time = quote_time.replace(tzinfo=timezone.utc)
         age = (now.astimezone(timezone.utc) - quote_time.astimezone(timezone.utc)).total_seconds()

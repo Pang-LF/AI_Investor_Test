@@ -85,6 +85,13 @@ class SafetyTests(unittest.TestCase):
                 [{"last_trade_time": "2026-09-09T20:00:00Z"}], now, 30
             )
         )
+        self.assertTrue(
+            quotes_are_fresh(
+                [{"last_trade_time": "2026-09-10T14:59:59.123456789Z"}],
+                now,
+                30,
+            )
+        )
         self.assertFalse(
             quotes_are_fresh(
                 [
