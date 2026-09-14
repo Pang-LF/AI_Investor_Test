@@ -247,7 +247,7 @@ def optimize_portfolio(
                 portfolio.reallocation_cost_fraction
                 * abs(weights[index] - baseline[index])
             ),
-            "initial_marginal_alpha_after_cost": (
+            "initial_marginal_return_after_entry_cost": (
                 expected_20d[index]
                 - (
                     portfolio.reallocation_cost_fraction

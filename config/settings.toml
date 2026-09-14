@@ -1,6 +1,6 @@
 mode = "LIVE"
 live_trading = true
-strategy_version = "strategy_v0.5.3"
+strategy_version = "strategy_v0.6.0"
 prompt_version = "research_v0.2.1"
 openai_model = "gpt-5.6-terra"
 max_input_tokens = 40000
@@ -64,6 +64,9 @@ min_history_bars = 100
 ridge_penalty = 8.0
 min_training_samples = 500
 shrinkage = 0.35
+calibration_prior_date_blocks = 20
+minimum_bias_correction_date_blocks = 20
+bias_bootstrap_samples = 1000
 research_candidate_count = 5
 research_min_raw_probability_positive = 0.48
 research_min_raw_expected_excess_return_20d = 0.005

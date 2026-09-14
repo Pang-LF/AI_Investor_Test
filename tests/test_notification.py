@@ -70,10 +70,10 @@ class NotificationTests(unittest.TestCase):
                 "fixed_etf_changes": {"SPY": .01, "QQQ": .01}},
             regime=MarketRegime("risk_off", -.01, .01, .2, .4),
             forecasts=[forecast], research=research, target_weights={}, orders=[],
-            timings={}, execution_gate_failures={"PBF": ["edge_ratio=0.115<0.150"]},
+            timings={}, investment_eligibility_failures={"PBF": ["edge_ratio=0.115<0.150"]},
         )
         self.assertIn("structural_regime=risk_off; intraday_tone=risk_on", body)
-        self.assertIn("execution gate failed", body)
+        self.assertIn("investment eligibility failed", body)
         self.assertIn("336/7, confidence=LOW", body)
 
     def test_intraday_tone_has_a_mixed_middle_state(self) -> None:

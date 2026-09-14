@@ -6,12 +6,14 @@ from ai_investor.config import Settings
 from ai_investor.forecasting import (
     AssetForecast,
     _beta_adjusted_return,
+    _date_block_positive_probability,
     _empirical_positive_probability,
     _rolling_beta,
+    _supported_bias_correction,
     candidate_forecasts,
     calibration_diagnostics,
-    execution_candidate_forecasts,
-    execution_gate_failures,
+    investment_candidate_forecasts,
+    investment_eligibility_failures,
     fit_ridge_model,
 )
 
@@ -36,6 +38,25 @@ class ForecastingTests(unittest.TestCase):
             _empirical_positive_probability(2.0, [-1.0, 1.0]), 0.5
         )
 
+    def test_probability_counts_dates_not_cross_section_rows(self) -> None:
+        errors = [1.0] * 100 + [-1.0]
+        dates = ["2026-01-01"] * 100 + ["2026-02-01"]
+        probability = _date_block_positive_probability(
+            0.0, errors, dates, prior_date_blocks=20
+        )
+        self.assertEqual(probability, 0.5)
+
+    def test_bias_correction_requires_supported_date_blocks(self) -> None:
+        self.assertEqual(
+            _supported_bias_correction(0.02, (0.01, 0.03), 7, 20), 0.0
+        )
+        self.assertEqual(
+            _supported_bias_correction(0.02, (0.01, 0.03), 20, 20), 0.01
+        )
+        self.assertEqual(
+            _supported_bias_correction(0.02, (-0.01, 0.03), 20, 20), 0.0
+        )
+
     def test_temporal_validation_retains_a_purged_gap(self) -> None:
         samples = []
         for day in range(200):
@@ -46,7 +67,7 @@ class ForecastingTests(unittest.TestCase):
         self.assertEqual(len(model.validation_errors), model.validation_samples)
         self.assertLess(model.validation_date_blocks, 40)
 
-    def test_validation_error_is_realized_minus_predicted_and_corrects_bias(self) -> None:
+    def test_validation_error_is_realized_minus_walk_forward_prediction(self) -> None:
         samples = []
         for day in range(160):
             target = 0.02 if day >= 128 else 0.0
@@ -54,7 +75,13 @@ class ForecastingTests(unittest.TestCase):
         model = fit_ridge_model(
             samples, horizon=5, penalty=8.0, minimum_samples=50, shrinkage=1.0
         )
-        self.assertGreater(model.validation_bias, 0.015)
+        for error, prediction, target in zip(
+            model.validation_errors,
+            model.validation_predictions,
+            model.validation_targets,
+        ):
+            self.assertAlmostEqual(error, target - prediction)
+        self.assertGreaterEqual(model.validation_date_blocks, 20)
         diagnostics = calibration_diagnostics(model)
         self.assertEqual(
             diagnostics["validation_date_blocks"], model.validation_date_blocks
@@ -86,9 +113,9 @@ class ForecastingTests(unittest.TestCase):
             calibration_date_blocks_20d=10,
         )
         self.assertEqual(candidate_forecasts([forecast], settings), [forecast])
-        self.assertEqual(execution_candidate_forecasts([forecast], settings), [])
+        self.assertEqual(investment_candidate_forecasts([forecast], settings), [])
         approved = replace(settings, execution_calibration_approved=True)
-        self.assertEqual(execution_candidate_forecasts([forecast], approved), [])
+        self.assertEqual(investment_candidate_forecasts([forecast], approved), [])
 
     def test_event_can_enter_research_without_creating_execution_edge(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).forecast
@@ -108,7 +135,7 @@ class ForecastingTests(unittest.TestCase):
             candidate_forecasts([forecast], settings, event_symbols={"EVENT"}),
             [forecast],
         )
-        self.assertEqual(execution_candidate_forecasts([forecast], settings), [])
+        self.assertEqual(investment_candidate_forecasts([forecast], settings), [])
 
     def test_execution_gate_reports_the_exact_failed_threshold(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).forecast
@@ -121,7 +148,7 @@ class ForecastingTests(unittest.TestCase):
             uncertainty_5d=.10, uncertainty_20d=.2134, signals={},
             calibration_date_blocks_20d=7,
         )
-        failures = execution_gate_failures(forecast, settings)
+        failures = investment_eligibility_failures(forecast, settings)
         self.assertEqual(len(failures), 1)
         self.assertIn("edge_ratio", failures[0])
 

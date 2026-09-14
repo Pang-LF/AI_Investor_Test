@@ -65,7 +65,7 @@ def build_decision_email(
     target_weights: Mapping[str, float],
     orders: Sequence[Mapping[str, Any]],
     timings: Mapping[str, float],
-    execution_gate_failures: Optional[Mapping[str, Sequence[str]]] = None,
+    investment_eligibility_failures: Optional[Mapping[str, Sequence[str]]] = None,
     holding_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
     portfolio_diagnostics: Optional[Mapping[str, Any]] = None,
     execution_calibration_approved: bool = True,
@@ -75,8 +75,12 @@ def build_decision_email(
         str(item.get("symbol", "")).upper(): item
         for item in research.assessment.get("candidates", [])
     }
-    gate_failures = execution_gate_failures or {}
+    gate_failures = investment_eligibility_failures or {}
     holding_statuses = holding_decisions or {}
+    order_symbols = {
+        str(item.get("symbol") or item.get("ticker") or "").upper()
+        for item in orders
+    }
     lines = [
         f"Run: {run_id}",
         f"Time: {timestamp}",
@@ -114,16 +118,20 @@ def build_decision_email(
             action_reason = "NOT TRADED: execution calibration is not approved"
         elif target > 0 and holding_state == "pending_exit_retained":
             action_reason = (
-                f"RETAINED: pending non-critical exit confirmation; "
+                f"RETAINED_PENDING_EXIT_CONFIRMATION: "
                 f"target weight={target:.2%}"
             )
         elif target > 0 and holding_state == "holding_gate_passed":
-            action_reason = f"RETAINED/REBALANCED: target weight={target:.2%}"
+            action_reason = (
+                f"REBALANCED: target weight={target:.2%}"
+                if forecast.symbol in order_symbols
+                else f"RETAINED_NO_REBALANCE: target weight={target:.2%}"
+            )
         elif verdict != "allow":
             action_reason = f"NOT SELECTED: LLM verdict={verdict}"
         elif gate_failures.get(forecast.symbol):
             action_reason = (
-                "NOT SELECTED: execution gate failed: "
+                "NOT SELECTED: investment eligibility failed: "
                 + "; ".join(gate_failures[forecast.symbol])
             )
         elif target <= 0:
@@ -138,7 +146,10 @@ def build_decision_email(
                     f"shrinkage {forecast.forecast_shrinkage:.2f} = "
                     f"shrunk forecast "
                     f"{forecast.raw_expected_excess_return_20d:.2%}, "
-                    f"validation bias={forecast.validation_bias_20d:+.2%}, "
+                    f"raw validation bias={forecast.validation_bias_20d:+.2%}, "
+                    f"bias interval=[{forecast.validation_bias_interval_20d[0]:+.2%}, "
+                    f"{forecast.validation_bias_interval_20d[1]:+.2%}], "
+                    f"applied bias={forecast.applied_validation_bias_20d:+.2%}, "
                     f"bias-adjusted expected excess 5d="
                     f"{forecast.expected_excess_return_5d:.2%}, 20d="
                     f"{forecast.expected_excess_return_20d:.2%}, "

@@ -165,6 +165,9 @@ class ForecastSettings:
     ridge_penalty: float
     min_training_samples: int
     shrinkage: float
+    calibration_prior_date_blocks: int
+    minimum_bias_correction_date_blocks: int
+    bias_bootstrap_samples: int
     research_candidate_count: int
     research_min_raw_probability_positive: float
     research_min_raw_expected_excess_return_20d: float
@@ -187,6 +190,11 @@ class ForecastSettings:
             ridge_penalty=float(raw["ridge_penalty"]),
             min_training_samples=int(raw["min_training_samples"]),
             shrinkage=float(raw["shrinkage"]),
+            calibration_prior_date_blocks=int(raw["calibration_prior_date_blocks"]),
+            minimum_bias_correction_date_blocks=int(
+                raw["minimum_bias_correction_date_blocks"]
+            ),
+            bias_bootstrap_samples=int(raw["bias_bootstrap_samples"]),
             research_candidate_count=int(raw["research_candidate_count"]),
             research_min_raw_probability_positive=float(
                 raw["research_min_raw_probability_positive"]
@@ -225,6 +233,12 @@ class ForecastSettings:
             raise RuntimeError("Forecasting requires at least 80 completed daily bars")
         if not 0 < settings.shrinkage <= 1:
             raise RuntimeError("Forecast shrinkage must be in (0, 1]")
+        if settings.calibration_prior_date_blocks < 1:
+            raise RuntimeError("Calibration prior must include at least one date block")
+        if settings.minimum_bias_correction_date_blocks < 10:
+            raise RuntimeError("Bias correction requires at least ten date blocks")
+        if not 200 <= settings.bias_bootstrap_samples <= 5000:
+            raise RuntimeError("Bias bootstrap samples must remain between 200 and 5000")
         if settings.research_candidate_count < 1 or settings.research_candidate_count > 5:
             raise RuntimeError("Research candidate count must remain between one and five")
         if not 0 < settings.research_min_raw_probability_positive < 1:

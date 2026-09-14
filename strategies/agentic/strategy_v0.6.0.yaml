@@ -1,0 +1,98 @@
+strategy_id: agentic_single_account
+version: strategy_v0.6.0
+effective_date: 2026-09-14
+owner: system_and_user
+supersedes: strategy_v0.5.3
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan: {initial_usd: 1000, month_1_usd: 1000, month_2_usd: 1000}
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  active_observation_size: 60
+  full_candidate_funnel_logged: true
+  structural_regime_source: completed_daily_bars
+  intraday_tone_source: current_SPY_QQQ_and_cross_sectional_breadth
+  regimes_affect_position_size: false
+
+decision_schedule:
+  mandatory_scheduled_decisions_et: ["09:45", "13:00", "15:30"]
+  missed_slot_policy: oldest_due_slot_runs_on_next_eligible_regular_market_cycle
+  maximum_event_triggered_decisions_per_day: 3
+  minimum_minutes_between_all_formal_decisions: 60
+  maximum_possible_formal_decisions_per_day: 6
+  monthly_llm_budget_usd: 10.00
+
+prediction:
+  model: pooled_beta_ridge_v0.4.0
+  horizons_days: [5, 20]
+  daily_snapshot: first_formal_decision_fits_later_decisions_reuse
+  snapshot_key: trading_date_and_forecast_config_fingerprint
+  residual_definition: realized_minus_shrunk_prediction
+  raw_bias_estimate: median_nonoverlapping_oos_residual
+  bias_interval: deterministic_date_block_bootstrap_95_percent
+  applied_bias:
+    minimum_independent_date_blocks: 20
+    interval_crosses_zero: 0
+    interval_excludes_zero: endpoint_closest_to_zero
+  probability_calibration:
+    unit: independent_date_block_cross_sectional_win_rate
+    prior: 20_date_blocks_centered_at_50_percent
+  uncertainty_reporting:
+    include_observation_count: true
+    include_independent_date_blocks: true
+    interval: date_clustered_95_percent
+    confidence: {low_below_blocks: 10, medium_below_blocks: 20}
+
+decision_funnel:
+  research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    maximum_new_names: 5
+  investment_eligibility:
+    bias_adjusted_excess_return_20d_minimum: 0.005
+    calibrated_probability_positive_minimum: 0.55
+    edge_ratio_minimum: 0.15
+    minimum_prior_nonoverlapping_blocks: 5
+    llm_verdict: allow
+  holding:
+    bias_adjusted_excess_return_20d_minimum: -0.005
+    calibrated_probability_positive_minimum: 0.45
+    edge_ratio_minimum: -0.05
+    noncritical_exit_confirmation_runs: 2
+    first_failure_forces_sale: false
+    llm_veto_or_critical_data_conflict_exits_immediately: true
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+
+portfolio:
+  horizon_days: 20
+  reallocation_cost_fraction: 0.004
+  risk_aversion: 8.0
+  uncertainty_penalty: 2.0
+  cash_is_valid: true
+  strategy_single_name_soft_cap: 0.35
+  strategy_sector_soft_cap: 0.50
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-14
+    changed_by: user_and_system
+    reason: Stabilize calibration and make the complete decision funnel auditable.
+    changes:
+      - freeze_coefficients_and_calibration_within_each_trading_day
+      - stop_applying_validation_bias_when_independent_support_is_insufficient
+      - use_date_block_probability_with_shrinkage_toward_fifty_percent
+      - log_all_sixty_observation_slots_through_the_decision_funnel
+      - rename_execution_gate_to_investment_eligibility
+      - rename_optimizer_marginal_return_diagnostic

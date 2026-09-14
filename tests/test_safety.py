@@ -264,6 +264,9 @@ class SafetyTests(unittest.TestCase):
                 '"XLV","XLY","XLP","XLI","XLE","XLU"]\n'
                 "[forecast]\nhistory_calendar_days=1095\nmin_history_bars=100\n"
                 "ridge_penalty=8\nmin_training_samples=500\nshrinkage=0.35\n"
+                "calibration_prior_date_blocks=20\n"
+                "minimum_bias_correction_date_blocks=20\n"
+                "bias_bootstrap_samples=1000\n"
                 "research_candidate_count=3\n"
                 "research_min_raw_probability_positive=0.48\n"
                 "research_min_raw_expected_excess_return_20d=0.005\n"

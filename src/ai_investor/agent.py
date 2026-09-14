@@ -10,6 +10,7 @@ from typing import Any, Dict, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from .config import Settings
+from .decision_funnel import build_candidate_funnel, finalize_candidate_funnel
 from .execution import (
     assert_live_armed,
     assert_live_armed_fingerprint,
@@ -22,8 +23,8 @@ from .execution import (
 from .forecasting import (
     calibration_diagnostics,
     candidate_forecasts,
-    execution_gate_failures,
-    execution_candidate_forecasts,
+    investment_candidate_forecasts,
+    investment_eligibility_failures,
     forecast_assets,
     holding_gate_failures,
     infer_market_regime,
@@ -32,6 +33,7 @@ from .health import clear_operational_failures, report_operational_failure
 from .ledger import Ledger
 from .market_data import HistoricalCache, get_daily_histories
 from .monitor import run_monitor_cycle
+from .model_snapshot import get_or_create_daily_models
 from .notification import (
     build_decision_email,
     classify_intraday_tone,
@@ -251,7 +253,12 @@ def run_agent_cycle(
                 for symbol, bars in histories.items()
                 if symbol == "SPY" or symbol in investable_symbols
             }
-            forecasts, models = forecast_assets(forecast_histories, settings.forecast)
+            models, model_snapshot = get_or_create_daily_models(
+                root, trading_date, forecast_histories, settings.forecast
+            )
+            forecasts, models = forecast_assets(
+                forecast_histories, settings.forecast, models=models
+            )
             event_symbols = {
                 str(item.get("symbol", "")).upper()
                 for item in entries
@@ -276,8 +283,24 @@ def run_agent_cycle(
                 if candidate.symbol not in {item.symbol for item in research_set}:
                     research_set.append(candidate)
             research_set = research_set[: settings.risk.max_positions]
+            candidate_funnel = build_candidate_funnel(
+                entries,
+                forecasts,
+                settings.forecast,
+                event_symbols=event_symbols,
+                research_symbols={item.symbol for item in research_set},
+                holding_symbols={position.symbol for position in state.positions},
+            )
             if not research_set:
-                payload = {"status": "no_quantitative_opportunity", "excluded_short_history": missing_history, "model_samples": {key: value.training_samples for key, value in models.items()}}
+                payload = {
+                    "status": "no_quantitative_opportunity",
+                    "excluded_short_history": missing_history,
+                    "model_samples": {
+                        key: value.training_samples for key, value in models.items()
+                    },
+                    "model_snapshot": model_snapshot,
+                    "candidate_funnel": candidate_funnel,
+                }
                 ledger.record_run(
                     run_id=run_id, decision_key=decision_key, trading_date=trading_date,
                     mode=settings.mode, status="no_trade", strategy_version=settings.strategy_version,
@@ -377,11 +400,13 @@ def run_agent_cycle(
             llm_reviewed = [
                 item for item in research_set if item.symbol in allowed
             ]
-            entry_eligible = execution_candidate_forecasts(
+            entry_eligible = investment_candidate_forecasts(
                 llm_reviewed, settings.forecast
             )
-            execution_gate_by_symbol = {
-                item.symbol: list(execution_gate_failures(item, settings.forecast))
+            investment_failures_by_symbol = {
+                item.symbol: list(
+                    investment_eligibility_failures(item, settings.forecast)
+                )
                 for item in llm_reviewed
             }
             assessments = {
@@ -502,6 +527,14 @@ def run_agent_cycle(
                 decision_started_at=current,
                 reference_prices=prices,
             )
+            candidate_funnel = finalize_candidate_funnel(
+                candidate_funnel,
+                assessments=assessments,
+                investment_failures=investment_failures_by_symbol,
+                holding_decisions=holding_decisions,
+                target_weights=target.weights,
+                orders=outcomes,
+            )
             timings["decision_to_orders_seconds"] = round(
                 time.monotonic() - cycle_started, 3
             )
@@ -520,7 +553,7 @@ def run_agent_cycle(
                 target_weights=target.weights,
                 orders=outcomes,
                 timings=timings,
-                execution_gate_failures=execution_gate_by_symbol,
+                investment_eligibility_failures=investment_failures_by_symbol,
                 holding_decisions=holding_decisions,
                 portfolio_diagnostics=target.diagnostics,
                 execution_calibration_approved=(
@@ -549,10 +582,12 @@ def run_agent_cycle(
                 "execution_calibration_approved": (
                     settings.forecast.execution_calibration_approved
                 ),
-                "execution_eligible_stocks": [item.symbol for item in eligible],
+                "portfolio_eligible_stocks": [item.symbol for item in eligible],
                 "entry_eligible_stocks": [item.symbol for item in entry_eligible],
-                "execution_gate_failures": execution_gate_by_symbol,
+                "investment_eligibility_failures": investment_failures_by_symbol,
                 "holding_decisions": holding_decisions,
+                "candidate_funnel": candidate_funnel,
+                "model_snapshot": model_snapshot,
                 "model_calibration": {
                     key: calibration_diagnostics(model)
                     for key, model in models.items()

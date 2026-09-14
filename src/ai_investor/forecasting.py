@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import asdict, dataclass
 from statistics import fmean, median
-from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .config import ForecastSettings
 from .market_data import DailyBar
@@ -31,6 +32,8 @@ class RidgeModel:
     validation_samples: int
     validation_date_blocks: int
     validation_bias: float
+    validation_bias_interval: Tuple[float, float]
+    applied_validation_bias: float
     validation_dates: Tuple[str, ...]
     validation_predictions: Tuple[float, ...]
     validation_targets: Tuple[float, ...]
@@ -68,13 +71,17 @@ class AssetForecast:
     raw_probability_positive_excess_20d: float = 0.5
     validation_bias_5d: float = 0.0
     validation_bias_20d: float = 0.0
+    validation_bias_interval_5d: Tuple[float, float] = (0.0, 0.0)
+    validation_bias_interval_20d: Tuple[float, float] = (0.0, 0.0)
+    applied_validation_bias_5d: float = 0.0
+    applied_validation_bias_20d: float = 0.0
     calibration_observations_5d: int = 0
     calibration_observations_20d: int = 0
     probability_positive_excess_5d_interval: Tuple[float, float] = (0.0, 1.0)
     probability_positive_excess_20d_interval: Tuple[float, float] = (0.0, 1.0)
     calibration_date_blocks_5d: int = 0
     calibration_date_blocks_20d: int = 0
-    model_version: str = "pooled_beta_ridge_v0.3.1"
+    model_version: str = "pooled_beta_ridge_v0.4.0"
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -253,31 +260,35 @@ def fit_ridge_model(
     penalty: float,
     minimum_samples: int,
     shrinkage: float = 1.0,
+    minimum_bias_correction_date_blocks: int = 20,
+    bias_bootstrap_samples: int = 1000,
 ) -> RidgeModel:
     if len(samples) < minimum_samples:
         raise ValueError(
             f"Insufficient training samples for {horizon}d model: {len(samples)}"
         )
     dates = sorted({sample[0] for sample in samples})
-    split_index = max(1, int(len(dates) * 0.80))
-    validation_start = dates[min(split_index, len(dates) - 1)]
-    train_end_index = max(0, split_index - horizon)
-    train_end = dates[train_end_index]
-    train = [sample for sample in samples if sample[0] < train_end]
-    validation = [sample for sample in samples if sample[0] >= validation_start]
-    if len(train) < minimum_samples // 2 or not validation:
-        raise ValueError("Insufficient samples after purged temporal split")
-    validation_core = _fit_core(train, penalty)
-    # Future-horizon labels from consecutive dates overlap. Retain only one
-    # cross-section per horizon-length block so calibration does not count the
-    # same subsequent market path twenty times for the 20-day model.
-    validation_dates = sorted({sample[0] for sample in validation})
-    calibration_dates = set(validation_dates[::horizon])
-    calibration = [sample for sample in validation if sample[0] in calibration_dates]
-    validation_predictions = [
-        shrinkage * _predict_components(validation_core, sample[1])
-        for sample in calibration
-    ]
+    # Expanding walk-forward calibration starts after 40% of dates and retains
+    # one cross-section per horizon. Each fold trains strictly before a full
+    # horizon purge, so coefficients and labels cannot see the evaluated period.
+    start_index = max(horizon + 1, int(len(dates) * 0.40))
+    calibration = []
+    validation_predictions: List[float] = []
+    for index in range(start_index, len(dates), horizon):
+        calibration_date = dates[index]
+        train_end = dates[index - horizon]
+        train = [sample for sample in samples if sample[0] < train_end]
+        fold = [sample for sample in samples if sample[0] == calibration_date]
+        if len(train) < minimum_samples or not fold:
+            continue
+        core = _fit_core(train, penalty)
+        calibration.extend(fold)
+        validation_predictions.extend(
+            shrinkage * _predict_components(core, sample[1]) for sample in fold
+        )
+    if not calibration:
+        raise ValueError("Insufficient samples after purged walk-forward splits")
+    calibration_dates = {sample[0] for sample in calibration}
     errors = [
         sample[2] - prediction
         for sample, prediction in zip(calibration, validation_predictions)
@@ -286,6 +297,21 @@ def fit_ridge_model(
         math.sqrt(fmean(error * error for error in errors)), 0.002
     )
     final = _fit_core(samples, penalty)
+    errors_by_date: Dict[str, List[float]] = {}
+    for sample, error in zip(calibration, errors):
+        errors_by_date.setdefault(sample[0], []).append(error)
+    raw_bias = median(median(values) for values in errors_by_date.values())
+    bias_interval = _date_block_bootstrap_median_interval(
+        errors,
+        [sample[0] for sample in calibration],
+        samples=bias_bootstrap_samples,
+    )
+    applied_bias = _supported_bias_correction(
+        raw_bias,
+        bias_interval,
+        len(calibration_dates),
+        minimum_bias_correction_date_blocks,
+    )
     return RidgeModel(
         horizon=horizon,
         intercept=final[0],
@@ -297,7 +323,9 @@ def fit_ridge_model(
         training_samples=len(samples),
         validation_samples=len(calibration),
         validation_date_blocks=len(calibration_dates),
-        validation_bias=median(errors),
+        validation_bias=raw_bias,
+        validation_bias_interval=bias_interval,
+        applied_validation_bias=applied_bias,
         validation_dates=tuple(sample[0] for sample in calibration),
         validation_predictions=tuple(validation_predictions),
         validation_targets=tuple(sample[2] for sample in calibration),
@@ -340,6 +368,73 @@ def _empirical_positive_probability(
     return (successes + 1.0) / (len(validation_errors) + 2.0)
 
 
+def _quantile(values: Sequence[float], probability: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        return 0.0
+    position = (len(ordered) - 1) * probability
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return ordered[lower]
+    fraction = position - lower
+    return ordered[lower] * (1.0 - fraction) + ordered[upper] * fraction
+
+
+def _date_block_bootstrap_median_interval(
+    validation_errors: Sequence[float],
+    validation_dates: Sequence[str],
+    *,
+    samples: int,
+) -> Tuple[float, float]:
+    by_date: Dict[str, List[float]] = {}
+    for date, error in zip(validation_dates, validation_errors):
+        by_date.setdefault(date, []).append(error)
+    block_medians = [median(by_date[date]) for date in sorted(by_date)]
+    if len(block_medians) < 2:
+        return (float("-inf"), float("inf"))
+    # A fixed seed makes the live rule reproducible and auditable.
+    generator = random.Random(0)
+    estimates: List[float] = []
+    for _ in range(samples):
+        resampled = [
+            block_medians[generator.randrange(len(block_medians))]
+            for _ in block_medians
+        ]
+        estimates.append(median(resampled))
+    return (_quantile(estimates, 0.025), _quantile(estimates, 0.975))
+
+
+def _supported_bias_correction(
+    raw_bias: float,
+    interval: Tuple[float, float],
+    date_blocks: int,
+    minimum_date_blocks: int,
+) -> float:
+    if date_blocks < minimum_date_blocks:
+        return 0.0
+    lower, upper = interval
+    if lower <= 0.0 <= upper:
+        return 0.0
+    return lower if raw_bias > 0 else upper
+
+
+def _date_block_positive_probability(
+    prediction: float,
+    validation_errors: Sequence[float],
+    validation_dates: Sequence[str],
+    prior_date_blocks: int,
+) -> float:
+    by_date: Dict[str, List[float]] = {}
+    for date, error in zip(validation_dates, validation_errors):
+        by_date.setdefault(date, []).append(float(prediction + error > 0))
+    rates = [fmean(values) for values in by_date.values() if values]
+    if not rates:
+        return 0.5
+    evidence_weight = len(rates) / (len(rates) + prior_date_blocks)
+    return 0.5 + evidence_weight * (fmean(rates) - 0.5)
+
+
 def _raw_positive_probability(prediction: float, uncertainty: float) -> float:
     if uncertainty <= 0:
         return 1.0 if prediction > 0 else 0.0
@@ -365,20 +460,29 @@ def _date_clustered_probability_interval(
 
 
 def forecast_assets(
-    histories: Mapping[str, Sequence[DailyBar]], settings: ForecastSettings
+    histories: Mapping[str, Sequence[DailyBar]], settings: ForecastSettings,
+    models: Optional[Mapping[str, RidgeModel]] = None,
 ) -> Tuple[List[AssetForecast], Dict[str, RidgeModel]]:
-    samples_5 = build_training_samples(histories, 5)
-    samples_20 = build_training_samples(histories, 20)
-    models = {
-        "5d": fit_ridge_model(
-            samples_5, 5, settings.ridge_penalty, settings.min_training_samples,
-            settings.shrinkage,
-        ),
-        "20d": fit_ridge_model(
-            samples_20, 20, settings.ridge_penalty, settings.min_training_samples,
-            settings.shrinkage,
-        ),
-    }
+    if models is None:
+        samples_5 = build_training_samples(histories, 5)
+        samples_20 = build_training_samples(histories, 20)
+        fitted_models = {
+            "5d": fit_ridge_model(
+                samples_5, 5, settings.ridge_penalty, settings.min_training_samples,
+                settings.shrinkage,
+                settings.minimum_bias_correction_date_blocks,
+                settings.bias_bootstrap_samples,
+            ),
+            "20d": fit_ridge_model(
+                samples_20, 20, settings.ridge_penalty, settings.min_training_samples,
+                settings.shrinkage,
+                settings.minimum_bias_correction_date_blocks,
+                settings.bias_bootstrap_samples,
+            ),
+        }
+    else:
+        fitted_models = dict(models)
+    models = fitted_models
     benchmark = histories.get("SPY") or []
     forecasts: List[AssetForecast] = []
     for symbol, bars in histories.items():
@@ -392,8 +496,8 @@ def forecast_assets(
         raw_20 = models["20d"].predict(features)
         raw_expected_5 = settings.shrinkage * raw_5
         raw_expected_20 = settings.shrinkage * raw_20
-        expected_5 = raw_expected_5 + models["5d"].validation_bias
-        expected_20 = raw_expected_20 + models["20d"].validation_bias
+        expected_5 = raw_expected_5 + models["5d"].applied_validation_bias
+        expected_20 = raw_expected_20 + models["20d"].applied_validation_bias
         cap = settings.max_abs_forecast_20d
         expected_20 = max(-cap, min(expected_20, cap))
         expected_5 = max(-cap / 2.0, min(expected_5, cap / 2.0))
@@ -409,11 +513,15 @@ def forecast_assets(
                 data_as_of=dates[-1],
                 expected_excess_return_5d=expected_5,
                 expected_excess_return_20d=expected_20,
-                probability_positive_excess_5d=_empirical_positive_probability(
-                    raw_expected_5, models["5d"].validation_errors
+                probability_positive_excess_5d=_date_block_positive_probability(
+                    raw_expected_5, models["5d"].validation_errors,
+                    models["5d"].validation_dates,
+                    settings.calibration_prior_date_blocks,
                 ),
-                probability_positive_excess_20d=_empirical_positive_probability(
-                    raw_expected_20, models["20d"].validation_errors
+                probability_positive_excess_20d=_date_block_positive_probability(
+                    raw_expected_20, models["20d"].validation_errors,
+                    models["20d"].validation_dates,
+                    settings.calibration_prior_date_blocks,
                 ),
                 uncertainty_5d=uncertainty_5,
                 uncertainty_20d=uncertainty_20,
@@ -431,6 +539,10 @@ def forecast_assets(
                 ),
                 validation_bias_5d=models["5d"].validation_bias,
                 validation_bias_20d=models["20d"].validation_bias,
+                validation_bias_interval_5d=models["5d"].validation_bias_interval,
+                validation_bias_interval_20d=models["20d"].validation_bias_interval,
+                applied_validation_bias_5d=models["5d"].applied_validation_bias,
+                applied_validation_bias_20d=models["20d"].applied_validation_bias,
                 calibration_observations_5d=models["5d"].validation_samples,
                 calibration_observations_20d=models["20d"].validation_samples,
                 probability_positive_excess_5d_interval=(
@@ -482,10 +594,10 @@ def candidate_forecasts(
     )[: settings.research_candidate_count]
 
 
-def execution_candidate_forecasts(
+def investment_candidate_forecasts(
     forecasts: Iterable[AssetForecast], settings: ForecastSettings
 ) -> List[AssetForecast]:
-    """Apply only calibrated execution requirements.
+    """Apply calibrated investment eligibility requirements.
 
     The thresholds remain disabled until a reviewed OOS calibration report is
     explicitly approved in configuration. Research can continue meanwhile.
@@ -494,11 +606,11 @@ def execution_candidate_forecasts(
         return []
     return [
         forecast for forecast in forecasts
-        if not execution_gate_failures(forecast, settings)
+        if not investment_eligibility_failures(forecast, settings)
     ]
 
 
-def execution_gate_failures(
+def investment_eligibility_failures(
     forecast: AssetForecast, settings: ForecastSettings
 ) -> Tuple[str, ...]:
     failures: List[str] = []
@@ -563,7 +675,7 @@ def calibration_diagnostics(model: RidgeModel) -> Dict[str, object]:
         model.validation_predictions,
         model.validation_targets,
     ):
-        adjusted = prediction + model.validation_bias
+        adjusted = prediction + model.applied_validation_bias
         observations.append(
             {
                 "date": date,
@@ -610,7 +722,9 @@ def calibration_diagnostics(model: RidgeModel) -> Dict[str, object]:
             else "MEDIUM" if model.validation_date_blocks < 20
             else "HIGH"
         ),
-        "median_validation_bias": model.validation_bias,
+        "raw_median_validation_bias": model.validation_bias,
+        "validation_bias_interval": model.validation_bias_interval,
+        "applied_validation_bias": model.applied_validation_bias,
         "residual_std": model.residual_std,
         "edge_ratio_buckets": rows,
     }

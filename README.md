@@ -27,8 +27,9 @@ Every 15 minutes during regular US market hours:
    slot is caught up on the next eligible cycle. Deterministic move triggers may
    start up to three additional decisions per day. Every formal decision,
    scheduled or triggered, must be at least 60 minutes after the previous one.
-3. A pooled, regularized model estimates 5- and 20-day rolling-beta-adjusted
-   returns from prior completed daily bars using purged temporal validation.
+3. The first formal decision of each day fits and freezes a pooled, regularized
+   5-/20-day model snapshot; later decisions that day reuse it. Calibration is
+   date-blocked, probabilities shrink toward 50%, and unsupported bias is not applied.
 4. Up to five new research candidates plus current holdings receive one structured
    GPT-5.6 Terra research call. All receive fundamentals and financials; the top
    five receive earnings and news. The LLM can allow or veto; it cannot size an order.
@@ -41,8 +42,12 @@ Every 15 minutes during regular US market hours:
 7. A deterministic UUID suppresses duplicate submissions. Robinhood review runs
    before placement; later cycles reconcile broker order states into SQLite.
 
+Every decision log contains a 60-slot candidate funnel showing why each symbol
+did or did not progress through research, LLM review, eligibility, optimization,
+and order generation.
+
 The versioned strategy is
-[`strategies/agentic/strategy_v0.5.3.yaml`](strategies/agentic/strategy_v0.5.3.yaml).
+[`strategies/agentic/strategy_v0.6.0.yaml`](strategies/agentic/strategy_v0.6.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).

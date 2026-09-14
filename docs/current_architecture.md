@@ -17,7 +17,7 @@ The top-level sequence is:
 2. Sixty-symbol observation cycle with zero LLM calls.
 3. Local deterministic trigger decision.
 4. Account-state read and previous-order reconciliation.
-5. Daily-bar forecast, OOS calibration, and research-candidate selection.
+5. Frozen daily model snapshot, OOS calibration, and research-candidate selection.
 6. Public research collection and one structured LLM call.
 7. Portfolio optimization with cash.
 8. Fresh-quote, price-drift, account, and hard-risk validation.
@@ -113,19 +113,29 @@ returns:
 The estimated 60-day beta is also logged and supplied to the LLM as context,
 although it is not an additional ridge coefficient.
 
-Separate models predict 5- and 20-day beta-adjusted return. Samples are split by
-date, not randomly, with a horizon-length purge between training and validation
-so overlapping forward labels do not cross the boundary. Ridge regularization
-reduces unstable coefficients. Forecasts are shrunk 65% by multiplying raw
-values by 0.35, then capped at +/-4% for 5 days and +/-8% for 20 days.
+Separate models predict 5- and 20-day beta-adjusted return. Calibration uses an
+expanding walk-forward starting after 40% of the available dates. Every fold is
+separated from its training sample by a full forecast-horizon purge, and only
+one cross-section per horizon is evaluated. Ridge regularization reduces
+unstable coefficients. Forecasts are shrunk 65% by multiplying raw values by
+0.35, then capped at +/-4% for 5 days and +/-8% for 20 days.
+The first formal decision for a trading day writes an immutable local model and
+calibration snapshot keyed by trading date and forecast-config fingerprint.
+Later decisions that day reuse its coefficients, residuals, and calibration even
+if the Dynamic/Event universe changes. A new configuration gets a separately
+fingerprinted snapshot rather than silently overwriting the prior one.
+
 Validation residuals are defined as `realized - shrunk prediction`. Consecutive
 20-day labels overlap, so calibration retains only one cross-section per
-horizon-length date block. The median non-overlapping OOS residual corrects
-forecast bias. Calibrated positive-return probability comes from that empirical
-OOS residual distribution applied to the shrunk forecast before bias adjustment,
-which is equivalent to applying centered residuals to the bias-adjusted forecast
-and avoids counting the bias twice. A separate normal-error raw probability is retained
-only for inexpensive research qualification.
+horizon-length date block. The raw median residual and a deterministic
+date-block bootstrap 95% interval are logged. Bias correction is zero below 20
+independent blocks; at 20 or more blocks it remains zero when the interval spans
+zero, otherwise only the interval endpoint closest to zero is applied. Positive-
+return probability is the mean cross-sectional win rate per independent date
+block, shrunk toward 50% using a 20-block prior. This prevents dozens of stocks
+from one date from masquerading as dozens of independent observations. A
+separate normal-error raw probability is retained only for inexpensive research
+qualification.
 
 The decision funnel has three levels. Level 1 sends at most five new names to
 research when raw shrunk 20-day alpha is at least 0.5% and raw probability is at
@@ -152,6 +162,13 @@ evidence. The thresholds are protective floors, not a proven optimal policy.
 Each email labels a seven-block calibration as LOW confidence and reports a
 date-clustered 95% interval rather than presenting the empirical point estimate
 as precise certainty.
+
+The decision log also records every one of the 60 observation slots in a
+candidate funnel: bucket, investability, forecast availability, research gate,
+rank/capacity outcome, LLM verdict, investment-eligibility failures, target
+weight, and final order/no-order disposition. This makes trigger attrition and
+bucket contribution measurable instead of reconstructing them from the final
+five names.
 
 Level 3, once enabled, makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
@@ -202,7 +219,7 @@ The decision log and email expose the actual sizing terms: shrunk and bias-
 adjusted forecast, forecast uncertainty, 20-day variance, current/minimum/final
 weights, expected-return contribution, covariance penalty, estimation penalty,
 reallocation cost, and old/new objective values. There is no hidden Kelly or
-regime multiplier in v0.5.3. Structural regime and deterministic intraday tone
+regime multiplier in v0.6.0. Structural regime and deterministic intraday tone
 are reported separately and are research context only.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy
