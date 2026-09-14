@@ -174,15 +174,31 @@ Level 3, once enabled, makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
 a quantitative edge.
 
-## LLM research gate
+## Persistent security state and active research
 
-The program, not the LLM, makes up to thirteen bounded research calls:
+SQLite preserves material security events across runs. Each event is keyed by
+symbol and type and stores status, concise summary, confidence, evidence category,
+first/last observation, expiry, and an objective invalidation condition. Only
+medium/high-confidence facts tied to supplied evidence are persisted. Expiry is
+programmatically capped by event type; low-confidence narratives are discarded,
+and a resolved event stops being supplied as active state.
+
+The program ranks deep-research priority deterministically with additive weights:
+active state 40, current price trigger 30, Dynamic/Event membership 20, and
+current holding 10; the original quantitative order breaks ties. Thus a newly
+triggered event can outrank a stale ordinary state. The program, not the LLM,
+makes at most 18 bounded research calls:
 
 - account-specific tradability for the research set;
 - fundamentals for up to ten candidates/current holdings;
 - financial statements for those same names;
-- earnings results for the top five research names;
-- news for the top five research names.
+- earnings results and news for the five highest-priority research names;
+- for up to two triggered/event/state names, SEC ticker resolution, recent
+  submissions metadata, and a bounded excerpt of the latest relevant filing.
+
+SEC ticker metadata is cached for seven days, submissions for one hour, and
+immutable filing excerpts locally. A SEC outage is recorded as unavailable
+evidence rather than silently replaced with invented information.
 
 The prompt contains the market regime, numeric forecasts, signals, uncertainty,
 and those research payloads. External text is explicitly treated as untrusted
@@ -194,7 +210,9 @@ calls out halts, delisting warnings, recent reverse splits, unresolved
 restructurings, and critical corporate-action data. Stale optional fields such
 as an old dividend record are quarantined as non-critical and cannot alone veto
 an otherwise supported ticker. The structured result records data severity and
-the affected fields.
+the affected fields. It also returns bounded durable facts, but those facts
+remain research context: they cannot create alpha, change hard risk, size an
+order, or place one.
 
 The OpenAI client uses a 480-second request timeout and no SDK retry. The
 separate 600-second decision-age gate rejects a result that arrives too late.
@@ -219,7 +237,7 @@ The decision log and email expose the actual sizing terms: shrunk and bias-
 adjusted forecast, forecast uncertainty, 20-day variance, current/minimum/final
 weights, expected-return contribution, covariance penalty, estimation penalty,
 reallocation cost, and old/new objective values. There is no hidden Kelly or
-regime multiplier in v0.6.0. Structural regime and deterministic intraday tone
+regime multiplier in v0.6.1. Structural regime and deterministic intraday tone
 are reported separately and are research context only.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy

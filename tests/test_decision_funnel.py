@@ -34,6 +34,7 @@ class DecisionFunnelTests(unittest.TestCase):
             [forecast],
             settings,
             event_symbols=(),
+            persistent_symbols=(),
             research_symbols={"AAA"},
             holding_symbols=(),
         )

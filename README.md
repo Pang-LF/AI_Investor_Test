@@ -31,8 +31,10 @@ Every 15 minutes during regular US market hours:
    5-/20-day model snapshot; later decisions that day reuse it. Calibration is
    date-blocked, probabilities shrink toward 50%, and unsupported bias is not applied.
 4. Up to five new research candidates plus current holdings receive one structured
-   GPT-5.6 Terra research call. All receive fundamentals and financials; the top
-   five receive earnings and news. The LLM can allow or veto; it cannot size an order.
+   GPT-5.6 Terra research call. All receive fundamentals and financials. Persistent
+   events, live triggers, event-bucket names, and holdings determine which five get
+   earnings/news and which two get bounded SEC filing research. The LLM can allow
+   or veto; it cannot size an order.
    Critical data conflicts are separated from quarantined non-critical fields.
 5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
    per-sector strategy soft caps and creates target weights including cash.
@@ -47,7 +49,7 @@ did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.6.0.yaml`](strategies/agentic/strategy_v0.6.0.yaml).
+[`strategies/agentic/strategy_v0.6.1.yaml`](strategies/agentic/strategy_v0.6.1.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -57,7 +59,8 @@ The full implemented data and decision flow is documented in
 - One LLM call per decision; no LLM call on ordinary 15-minute monitor cycles.
 - Maximum 40,000 input and 2,400 output tokens.
 - Maximum $0.15 per call and $10 total LLM spend per month.
-- Thirteen public-research calls and 50 total Robinhood MCP calls per decision run.
+- At most 18 research calls, including bounded SEC requests, and 50 total
+  Robinhood MCP calls per decision run.
 - The earlier three-name Luna integration call cost about $0.0032; Terra/five-name
   runs will cost more and are measured individually in the ledger and email.
 

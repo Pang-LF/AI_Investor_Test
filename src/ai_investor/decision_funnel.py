@@ -12,11 +12,13 @@ def build_candidate_funnel(
     settings: ForecastSettings,
     *,
     event_symbols: Iterable[str],
+    persistent_symbols: Iterable[str],
     research_symbols: Iterable[str],
     holding_symbols: Iterable[str],
 ) -> list[Dict[str, Any]]:
     by_symbol = {item.symbol: item for item in forecasts}
     event_set = {symbol.upper() for symbol in event_symbols}
+    persistent_set = {symbol.upper() for symbol in persistent_symbols}
     research_set = {symbol.upper() for symbol in research_symbols}
     holding_set = {symbol.upper() for symbol in holding_symbols}
     ranked = sorted(
@@ -30,6 +32,7 @@ def build_candidate_funnel(
                 >= settings.research_min_raw_probability_positive
             )
             or forecast.symbol in event_set
+            or forecast.symbol in persistent_set
         ),
         key=lambda forecast: (
             forecast.raw_expected_excess_return_20d
@@ -56,6 +59,7 @@ def build_candidate_funnel(
             >= settings.research_min_raw_probability_positive
         )
         event_bypass = bool(forecast and symbol in event_set)
+        persistent_bypass = bool(forecast and symbol in persistent_set)
         selected = symbol in research_set
         if not investable:
             reason = "context_only_not_investable"
@@ -63,9 +67,11 @@ def build_candidate_funnel(
             reason = "missing_or_short_history"
         elif symbol in holding_set:
             reason = "current_holding_priority"
+        elif persistent_bypass:
+            reason = "persistent_event_continuity"
         elif selected:
             reason = "selected_by_quant_rank_or_event"
-        elif raw_gate_passed or event_bypass:
+        elif raw_gate_passed or event_bypass or persistent_bypass:
             reason = "qualified_but_below_research_capacity"
         else:
             reason = "research_threshold_not_met"
@@ -76,6 +82,7 @@ def build_candidate_funnel(
                 "investable": investable,
                 "current_holding": symbol in holding_set,
                 "event_candidate": symbol in event_set,
+                "persistent_event": symbol in persistent_set,
                 "forecast_available": forecast is not None,
                 "raw_expected_excess_return_20d": (
                     forecast.raw_expected_excess_return_20d if forecast else None

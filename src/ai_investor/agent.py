@@ -42,7 +42,15 @@ from .notification import (
     send_or_queue,
 )
 from .portfolio import TargetPortfolio, optimize_portfolio
-from .research import allowed_symbols, analyze_candidates, collect_research
+from .public_filings import collect_sec_filings
+from .research import (
+    allowed_symbols,
+    analyze_candidates,
+    collect_research,
+    persist_security_facts,
+    plan_deep_research,
+    plan_sec_research,
+)
 from .robinhood_mcp import RobinhoodMCPClient
 
 
@@ -264,9 +272,38 @@ def run_agent_cycle(
                 for item in entries
                 if item.get("bucket") == "event" and item.get("symbol")
             }
-            candidates = candidate_forecasts(
-                forecasts, settings.forecast, event_symbols=event_symbols
+            universe_security_state = ledger.active_security_events(
+                investable_symbols, trading_date
             )
+            continuity_symbols = set(universe_security_state)
+            continuity_order = sorted(
+                continuity_symbols,
+                key=lambda symbol: (
+                    max(
+                        str(item.get("last_seen_at", ""))
+                        for item in universe_security_state[symbol]
+                    ),
+                    symbol,
+                ),
+                reverse=True,
+            )
+            ranked_candidates = candidate_forecasts(
+                forecasts,
+                settings.forecast,
+                event_symbols=event_symbols | continuity_symbols,
+            )
+            forecast_by_symbol = {item.symbol: item for item in forecasts}
+            continuity_candidates = [
+                forecast_by_symbol[symbol]
+                for symbol in continuity_order
+                if symbol in forecast_by_symbol
+            ]
+            candidates = list(
+                {
+                    item.symbol: item
+                    for item in continuity_candidates + ranked_candidates
+                }.values()
+            )[: settings.forecast.research_candidate_count]
             timings["history_and_forecast_seconds"] = round(
                 time.monotonic() - forecast_started, 3
             )
@@ -288,6 +325,7 @@ def run_agent_cycle(
                 forecasts,
                 settings.forecast,
                 event_symbols=event_symbols,
+                persistent_symbols=continuity_symbols,
                 research_symbols={item.symbol for item in research_set},
                 holding_symbols={position.symbol for position in state.positions},
             )
@@ -335,8 +373,31 @@ def run_agent_cycle(
                     detail=str(exc),
                 )
             research_started = time.monotonic()
-            expected_research_calls = 3 + 2 * min(
-                len(research_set), settings.research.deep_candidate_count
+            research_symbols_ordered = [item.symbol for item in research_set]
+            persistent_security_state = {
+                symbol: universe_security_state[symbol]
+                for symbol in research_symbols_ordered
+                if symbol in universe_security_state
+            }
+            deep_symbols = plan_deep_research(
+                research_symbols_ordered,
+                entries=entries,
+                triggers=monitor.triggers,
+                holding_symbols={position.symbol for position in state.positions},
+                persistent_state=persistent_security_state,
+                limit=settings.research.deep_candidate_count,
+            )
+            sec_symbols = plan_sec_research(
+                deep_symbols,
+                entries=entries,
+                triggers=monitor.triggers,
+                persistent_state=persistent_security_state,
+                limit=settings.research.max_sec_symbols_per_run,
+            )
+            expected_research_calls = (
+                3
+                + 2 * len(deep_symbols)
+                + (1 + 2 * len(sec_symbols) if sec_symbols else 0)
             )
             if expected_research_calls > settings.max_tool_calls_per_run:
                 raise RuntimeError(
@@ -344,10 +405,32 @@ def run_agent_cycle(
                 )
             research_payload, source_tools = collect_research(
                 client,
-                [item.symbol for item in research_set],
+                research_symbols_ordered,
                 settings.research.deep_candidate_count,
                 account_number=state.account_number,
+                deep_symbols=deep_symbols,
             )
+            sec_payload, sec_tools = collect_sec_filings(
+                root,
+                sec_symbols,
+                user_agent=(
+                    f"AIInvestorTest/0.6 ({email_config.sender})"
+                    if email_config is not None
+                    else "AIInvestorTest/0.6"
+                ),
+                max_symbols=settings.research.max_sec_symbols_per_run,
+            )
+            source_tools = tuple(source_tools) + tuple(sec_tools)
+            if len(source_tools) > settings.max_tool_calls_per_run:
+                raise RuntimeError("Actual research tool-call budget exceeded")
+            research_payload = {
+                "research_plan": {
+                    "deep_symbols": deep_symbols,
+                    "sec_symbols": sec_symbols,
+                },
+                "sec_filings": sec_payload,
+                **research_payload,
+            }
             research_symbols = {item.symbol for item in research_set}
             research_payload["universe_eligibility"] = [
                 item
@@ -363,6 +446,7 @@ def run_agent_cycle(
                     forecasts=research_set, regime=regime,
                     market_context=monitor_payload.get("market_summary") or {},
                     research=research_payload, source_tools=source_tools,
+                    persistent_security_state=persistent_security_state,
                 )
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
@@ -396,6 +480,16 @@ def run_agent_cycle(
                     decision_key=decision_key, detail=error,
                 )
             timings["llm_seconds"] = round(research.latency_seconds, 3)
+            persisted_security_facts = persist_security_facts(
+                ledger,
+                research.assessment,
+                current,
+                research_evidence=research_payload,
+                persistent_state=persistent_security_state,
+            )
+            updated_security_state = ledger.active_security_events(
+                set(research_symbols_ordered), trading_date
+            )
             allowed = allowed_symbols(research)
             llm_reviewed = [
                 item for item in research_set if item.symbol in allowed
@@ -586,6 +680,25 @@ def run_agent_cycle(
                 "entry_eligible_stocks": [item.symbol for item in entry_eligible],
                 "investment_eligibility_failures": investment_failures_by_symbol,
                 "holding_decisions": holding_decisions,
+                "research_plan": research_payload.get("research_plan", {}),
+                "research_sources": {
+                    "tools": list(source_tools),
+                    "sec_filings": {
+                        symbol: {
+                            "status": item.get("status"),
+                            "cik": item.get("cik"),
+                            "company_name": item.get("company_name"),
+                            "recent_filings": item.get("recent_filings", []),
+                            "latest_filing_excerpt_chars": len(
+                                str(item.get("latest_filing_excerpt", ""))
+                            ),
+                        }
+                        for symbol, item in sec_payload.items()
+                    },
+                },
+                "persistent_security_state_before": persistent_security_state,
+                "persistent_security_state_after": updated_security_state,
+                "persisted_security_fact_count": persisted_security_facts,
                 "candidate_funnel": candidate_funnel,
                 "model_snapshot": model_snapshot,
                 "model_calibration": {

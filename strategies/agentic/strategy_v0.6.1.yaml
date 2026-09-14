@@ -1,0 +1,106 @@
+strategy_id: agentic_single_account
+version: strategy_v0.6.1
+effective_date: 2026-09-14
+owner: system_and_user
+supersedes: strategy_v0.6.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan: {initial_usd: 1000, month_1_usd: 1000, month_2_usd: 1000}
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  active_observation_size: 60
+  full_candidate_funnel_logged: true
+
+prediction:
+  model: pooled_beta_ridge_v0.4.0
+  horizons_days: [5, 20]
+  daily_snapshot: first_formal_decision_fits_later_decisions_reuse
+  applied_bias:
+    minimum_independent_date_blocks: 20
+    interval_crosses_zero: 0
+    interval_excludes_zero: endpoint_closest_to_zero
+  probability_calibration:
+    unit: independent_date_block_cross_sectional_win_rate
+    prior: 20_date_blocks_centered_at_50_percent
+
+decision_funnel:
+  research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    maximum_new_names: 5
+  investment_eligibility:
+    bias_adjusted_excess_return_20d_minimum: 0.005
+    calibrated_probability_positive_minimum: 0.55
+    edge_ratio_minimum: 0.15
+    minimum_prior_nonoverlapping_blocks: 5
+    llm_verdict: allow
+  holding:
+    bias_adjusted_excess_return_20d_minimum: -0.005
+    calibrated_probability_positive_minimum: 0.45
+    edge_ratio_minimum: -0.05
+    noncritical_exit_confirmation_runs: 2
+
+persistent_security_state:
+  storage: local_sqlite
+  fields:
+    - symbol
+    - event_type
+    - status
+    - summary
+    - confidence
+    - source_basis
+    - first_seen_at
+    - last_seen_at
+    - valid_until
+    - invalidation_condition
+  persist_only_medium_or_high_confidence: true
+  expiry_capped_by_event_type: true
+  may_create_quantitative_alpha: false
+
+active_research:
+  deep_priority_weights:
+    persistent_active_event: 40
+    current_market_trigger: 30
+    dynamic_event_bucket: 20
+    current_holding: 10
+  priority_tiebreaker: quantitative_order
+  fundamentals_and_financials_for_all_research_names: true
+  earnings_and_news_names: 5
+  sec_research_names: 2
+  sec_forms: [8-K, 10-K, 10-Q, S-3, 424B3, 424B5, SC-13D, SC-14D9]
+  maximum_total_research_calls: 18
+  llm_calls_per_decision: 1
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.3.0
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+
+portfolio:
+  horizon_days: 20
+  reallocation_cost_fraction: 0.004
+  risk_aversion: 8.0
+  uncertainty_penalty: 2.0
+  cash_is_valid: true
+  strategy_single_name_soft_cap: 0.35
+  strategy_sector_soft_cap: 0.50
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-14
+    changed_by: user_and_system
+    reason: Preserve material company events and actively investigate event causes.
+    changes:
+      - add_expiring_source_bound_persistent_security_event_state
+      - prioritize_deep_research_by_state_trigger_event_and_holding
+      - add_bounded_sec_submissions_and_latest_filing_excerpt_for_two_names
+      - retain_one_llm_call_and_all_existing_trade_and_hard_risk_boundaries

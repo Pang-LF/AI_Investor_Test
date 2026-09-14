@@ -280,7 +280,7 @@ class SafetyTests(unittest.TestCase):
                 "holding_min_edge_ratio_20d=-0.05\n"
                 "holding_exit_confirmation_runs=2\n"
                 "max_abs_forecast_20d=0.08\n"
-                "[research]\ndeep_candidate_count=1\n"
+                "[research]\ndeep_candidate_count=1\nmax_sec_symbols_per_run=1\n"
                 "[portfolio]\nmax_invested_fraction=1.0\n"
                 "soft_max_position_fraction=0.35\n"
                 "soft_max_sector_fraction=0.50\nrisk_aversion=8\n"

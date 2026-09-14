@@ -44,7 +44,7 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
-No daily terminal command is required after this. Strategy v0.6.0 has provisional
+No daily terminal command is required after this. Strategy v0.6.1 has provisional
 execution calibration enabled. A new buy still requires at least 0.5%
 bias-adjusted 20-day alpha, 55% calibrated probability, a 0.15 edge ratio, five
 non-overlapping calibration blocks, no LLM veto, positive portfolio improvement

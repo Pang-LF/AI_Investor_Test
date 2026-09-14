@@ -91,6 +91,22 @@ class Ledger:
                 reason TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS security_event_state (
+                symbol TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                source_basis_json TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                valid_until TEXT NOT NULL,
+                invalidation_condition TEXT NOT NULL,
+                PRIMARY KEY(symbol, event_type)
+            );
+            CREATE INDEX IF NOT EXISTS security_event_validity_idx
+                ON security_event_state(status, valid_until);
             """
         )
         columns = {
@@ -363,6 +379,76 @@ class Ledger:
                 f"DELETE FROM holding_exit_state WHERE symbol NOT IN ({placeholders})",
                 tuple(sorted(active_symbols)),
             )
+        self.connection.commit()
+
+    def active_security_events(
+        self, symbols: set[str], as_of: str
+    ) -> Dict[str, list[Dict[str, Any]]]:
+        if not symbols:
+            return {}
+        placeholders = ",".join("?" for _ in symbols)
+        rows = self.connection.execute(
+            f"""
+            SELECT * FROM security_event_state
+            WHERE symbol IN ({placeholders})
+              AND status='active' AND valid_until>=?
+            ORDER BY symbol, event_type
+            """,
+            (*sorted(symbols), as_of),
+        ).fetchall()
+        result: Dict[str, list[Dict[str, Any]]] = {}
+        for raw in rows:
+            item = dict(raw)
+            try:
+                source_payload = json.loads(item.pop("source_basis_json"))
+                item["source_basis"] = list(source_payload.get("items", []))
+            except (AttributeError, json.JSONDecodeError, TypeError):
+                item["source_basis"] = []
+            result.setdefault(str(item["symbol"]), []).append(item)
+        return result
+
+    def upsert_security_event(
+        self,
+        *,
+        symbol: str,
+        event_type: str,
+        status: str,
+        summary: str,
+        confidence: str,
+        source_basis: list[str],
+        observed_at: str,
+        valid_until: str,
+        invalidation_condition: str,
+    ) -> None:
+        self.connection.execute(
+            """
+            INSERT INTO security_event_state(
+                symbol, event_type, status, summary, confidence,
+                source_basis_json, first_seen_at, last_seen_at, valid_until,
+                invalidation_condition
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(symbol,event_type) DO UPDATE SET
+                status=excluded.status,
+                summary=excluded.summary,
+                confidence=excluded.confidence,
+                source_basis_json=excluded.source_basis_json,
+                last_seen_at=excluded.last_seen_at,
+                valid_until=excluded.valid_until,
+                invalidation_condition=excluded.invalidation_condition
+            """,
+            (
+                symbol.upper(),
+                event_type,
+                status,
+                summary,
+                confidence,
+                self._json({"items": source_basis}),
+                observed_at,
+                observed_at,
+                valid_until,
+                invalidation_condition,
+            ),
+        )
         self.connection.commit()
 
     def upsert_order(

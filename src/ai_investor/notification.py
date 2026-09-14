@@ -194,6 +194,14 @@ def build_decision_email(
                 f"  Bull: {item.get('bull_case', '')}",
                 f"  Bear: {item.get('bear_case', '')}",
                 f"  Falsification: {item.get('falsification', '')}",
+                (
+                    "  Durable facts: "
+                    + json.dumps(
+                        item.get("durable_facts", []),
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                ),
             ]
         )
     lines.extend(

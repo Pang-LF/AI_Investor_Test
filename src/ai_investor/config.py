@@ -261,12 +261,18 @@ class ForecastSettings:
 @dataclass(frozen=True)
 class ResearchSettings:
     deep_candidate_count: int
+    max_sec_symbols_per_run: int
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ResearchSettings":
-        settings = cls(deep_candidate_count=int(raw["deep_candidate_count"]))
+        settings = cls(
+            deep_candidate_count=int(raw["deep_candidate_count"]),
+            max_sec_symbols_per_run=int(raw["max_sec_symbols_per_run"]),
+        )
         if not 1 <= settings.deep_candidate_count <= 5:
             raise RuntimeError("Deep news/earnings research must cover 1-5 names")
+        if not 0 <= settings.max_sec_symbols_per_run <= 2:
+            raise RuntimeError("SEC research must cover no more than two names")
         return settings
 
 
@@ -501,8 +507,8 @@ class Settings:
             )
         if int(raw["max_llm_calls_per_run"]) != 1:
             raise RuntimeError("Decision runs must use exactly one bounded LLM call")
-        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 13:
-            raise RuntimeError("Research tool budget may not exceed thirteen")
+        if not 1 <= int(raw["max_tool_calls_per_run"]) <= 18:
+            raise RuntimeError("Research tool budget may not exceed eighteen")
         if not 1 <= int(raw["max_mcp_calls_per_decision_run"]) <= 50:
             raise RuntimeError("Decision MCP call budget must be between one and fifty")
 
