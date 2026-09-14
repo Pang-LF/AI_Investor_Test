@@ -67,6 +67,13 @@ deduplicates multiple share classes of the same issuer. Context ETFs do not
 consume these stock-sector limits. If the constrained pools cannot provide 60
 unique names, the cycle fails instead of silently relaxing a control.
 
+Robinhood's current scanner contract requires saved scans. Four scanners—large,
+mid, small, and event—are created once by an explicit provisioning command. Each
+title includes a deterministic definition fingerprint; their account-specific
+IDs and complete fingerprints remain in ignored `.local/state/scanners.json`.
+The recurring process is allowlisted for `run_scan` only and cannot create or
+modify scanners. Missing or mismatched registry state fails closed.
+
 Robinhood quotes are fetched in exactly three batches of 20. For every symbol the
 monitor stores the last regular-hours trade and time, bid, ask, adjusted previous
 close, official prior close, state, and `has_traded`. A missing symbol, malformed

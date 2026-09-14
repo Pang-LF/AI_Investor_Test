@@ -131,7 +131,7 @@ class MonitorSettings:
         ) // self.quote_batch_size
         if required_batches != 3:
             raise RuntimeError("The 60-symbol monitor must use exactly three batches")
-        if self.max_mcp_calls_per_cycle < 13:
+        if self.max_mcp_calls_per_cycle < 14:
             raise RuntimeError("MCP call budget is too small for a full refresh cycle")
         if self.max_quote_age_minutes < self.interval_minutes:
             raise RuntimeError("Quote freshness window must cover at least one interval")

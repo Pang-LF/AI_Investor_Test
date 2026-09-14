@@ -96,179 +96,10 @@ def resolve_agentic_account(
     )
 
 
-def _common_columns() -> List[Dict[str, Any]]:
-    columns = [
-        {"display_name": name, "visible": True}
-        for name in (
-            "Market cap",
-            "Sector",
-            "Volume",
-            "Average volume",
-            "Relative volume",
-            "% Change",
-        )
-    ]
-    columns.extend(
-        [
-            {
-                "display_name": "Float shares",
-                "expression": "fundamental.sharesFloat",
-                "visible": True,
-            },
-            {
-                "display_name": "Float ratio",
-                "expression": (
-                    "fundamental.sharesFloat / fundamental.sharesOutstanding"
-                ),
-                "visible": True,
-            },
-            {
-                "display_name": "IPO age days",
-                "expression": (
-                    "daysFromNow(fundamental.initialPublicOfferingYmd)"
-                ),
-                "visible": True,
-            },
-            {
-                "display_name": "Listing venue",
-                "expression": "officialPlaceOfListing",
-                "visible": True,
-            },
-            {
-                "display_name": "Trading status",
-                "expression": "tradingStatus",
-                "visible": True,
-            },
-        ]
-    )
-    return columns
-
-
-def _size_rows(
-    client: RobinhoodReadOnlyMCPClient,
-    *,
-    minimum_market_cap: int,
-    maximum_market_cap: Optional[int],
-    minimum_price: float,
-    minimum_average_volume: int,
-    minimum_ipo_age_calendar_days: int,
-    minimum_float_ratio: Optional[float] = None,
+def _scan_rows(
+    client: RobinhoodReadOnlyMCPClient, scan_id: str
 ) -> List[Dict[str, Any]]:
-    market_cap_filter = {
-        "filter_type": "FILTER_TYPE_MARKET_CAP",
-        "predicate": "BETWEEN" if maximum_market_cap is not None else ">=",
-        "values": (
-            [str(minimum_market_cap), str(maximum_market_cap - 1)]
-            if maximum_market_cap is not None
-            else [str(minimum_market_cap)]
-        ),
-    }
-    filters: List[Dict[str, Any]] = [
-        {
-            "filter_type": "FILTER_TYPE_INSTRUMENT_TYPE",
-            "predicate": "=",
-            "values": ["STOCK"],
-        },
-        market_cap_filter,
-        {
-            "filter_type": "FILTER_TYPE_LAST",
-            "predicate": ">=",
-            "values": [str(minimum_price)],
-        },
-        {
-            "filter_type": "FILTER_TYPE_AVERAGE_VOLUME",
-            "predicate": ">=",
-            "values": [str(minimum_average_volume)],
-            "interval": "1d",
-            "length": 30,
-        },
-        {
-            # Robinhood's daysFromNow is negative for dates in the past.
-            "expression": "daysFromNow(fundamental.initialPublicOfferingYmd)",
-            "predicate": "<=",
-            "values": [str(-minimum_ipo_age_calendar_days)],
-            "display_title": "IPO age days",
-        },
-    ]
-    if minimum_float_ratio is not None:
-        filters.append(
-            {
-                "expression": (
-                    "fundamental.sharesFloat / fundamental.sharesOutstanding"
-                ),
-                "predicate": ">=",
-                "values": [str(minimum_float_ratio)],
-                "display_title": "Float ratio",
-            }
-        )
-    # A filter-created expression is already a result column. Supplying the
-    # same expression a second time is rejected by Robinhood.
-    duplicate_columns = {"IPO age days"}
-    if minimum_float_ratio is not None:
-        duplicate_columns.add("Float ratio")
-    payload = client.call_tool(
-        "preview_scan",
-        {
-            "filters": filters,
-            "columns": [
-                column
-                for column in _common_columns()
-                if column["display_name"] not in duplicate_columns
-            ],
-        },
-    )
-    return _rows(payload)
-
-
-def _event_rows(
-    client: RobinhoodReadOnlyMCPClient, settings: MonitorSettings
-) -> List[Dict[str, Any]]:
-    change = settings.event_min_absolute_change
-    payload = client.call_tool(
-        "preview_scan",
-        {
-            "filters": [
-                {
-                    "filter_type": "FILTER_TYPE_INSTRUMENT_TYPE",
-                    "predicate": "=",
-                    "values": ["STOCK"],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_MARKET_CAP",
-                    "predicate": ">=",
-                    "values": [str(settings.event_min_market_cap)],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_LAST",
-                    "predicate": ">=",
-                    "values": [str(settings.small_min_price)],
-                },
-                {
-                    "filter_type": "FILTER_TYPE_AVERAGE_VOLUME",
-                    "predicate": ">=",
-                    "values": [str(settings.event_min_average_volume)],
-                    "interval": "1d",
-                    "length": 30,
-                },
-                {
-                    "filter_type": "FILTER_TYPE_RELATIVE_VOLUME",
-                    "predicate": ">=",
-                    "values": [str(settings.event_min_relative_volume)],
-                    "interval": "1d",
-                    "length": 30,
-                },
-                {
-                    "filter_type": "FILTER_TYPE_PERCENT_CHANGE_FROM_CLOSE",
-                    "predicate": "OUTSIDE",
-                    "values": [str(-change), str(change)],
-                    "interval": "1d",
-                    "plot": "Close",
-                },
-            ],
-            "columns": _common_columns(),
-        },
-    )
-    return _rows(payload)
+    return _rows(client.call_tool("run_scan", {"scan_id": scan_id}))
 
 
 def _row_metrics(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -501,16 +332,10 @@ def _interleave_event_directions(
 def scan_large_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
+    scan_id: str,
 ) -> List[UniverseEntry]:
     return _rank_core(
-        _size_rows(
-            client,
-            minimum_market_cap=settings.large_min_market_cap,
-            maximum_market_cap=None,
-            minimum_price=settings.large_min_price,
-            minimum_average_volume=settings.large_min_average_volume,
-            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
-        ),
+        _scan_rows(client, scan_id),
         settings.large_min_average_dollar_volume,
         "large",
     )
@@ -519,16 +344,10 @@ def scan_large_candidates(
 def scan_mid_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
+    scan_id: str,
 ) -> List[UniverseEntry]:
     return _rank_core(
-        _size_rows(
-            client,
-            minimum_market_cap=settings.mid_min_market_cap,
-            maximum_market_cap=settings.mid_max_market_cap,
-            minimum_price=settings.mid_min_price,
-            minimum_average_volume=settings.mid_min_average_volume,
-            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
-        ),
+        _scan_rows(client, scan_id),
         settings.mid_min_average_dollar_volume,
         "mid",
     )
@@ -537,17 +356,10 @@ def scan_mid_candidates(
 def scan_small_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
+    scan_id: str,
 ) -> List[UniverseEntry]:
     return _rank_core(
-        _size_rows(
-            client,
-            minimum_market_cap=settings.small_min_market_cap,
-            maximum_market_cap=settings.small_max_market_cap,
-            minimum_price=settings.small_min_price,
-            minimum_average_volume=settings.small_min_average_volume,
-            minimum_ipo_age_calendar_days=settings.stable_min_ipo_age_calendar_days,
-            minimum_float_ratio=settings.small_min_float_ratio,
-        ),
+        _scan_rows(client, scan_id),
         settings.small_min_average_dollar_volume,
         "small",
     )
@@ -556,8 +368,9 @@ def scan_small_candidates(
 def scan_event_candidates(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
+    scan_id: str,
 ) -> List[UniverseEntry]:
-    return _rank_events(_event_rows(client, settings))
+    return _rank_events(_scan_rows(client, scan_id))
 
 
 def filter_small_candidates_by_median_liquidity(
@@ -796,14 +609,15 @@ def build_universe(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,
     position_symbols: Sequence[str],
+    scan_ids: Dict[str, str],
 ) -> List[UniverseEntry]:
     return assemble_universe(
         settings,
         position_symbols,
-        scan_large_candidates(client, settings),
-        scan_mid_candidates(client, settings),
-        scan_small_candidates(client, settings),
-        scan_event_candidates(client, settings),
+        scan_large_candidates(client, settings, scan_ids["large"]),
+        scan_mid_candidates(client, settings, scan_ids["mid"]),
+        scan_small_candidates(client, settings, scan_ids["small"]),
+        scan_event_candidates(client, settings, scan_ids["event"]),
     )
 
 

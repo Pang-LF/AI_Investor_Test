@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from .config import Settings
 from .execution import account_fingerprint
 from .robinhood_mcp import RobinhoodReadOnlyMCPClient
+from .scanners import ScannerRegistry, scanner_definitions
 from .time_utils import parse_rfc3339
 from .universe import (
     UniverseEntry,
@@ -321,6 +322,10 @@ def run_monitor_cycle(
     trading_date = local.date().isoformat()
     refresh_bucket = _refresh_bucket(current, settings.monitor.market_timezone)
     cache = UniverseCache(root / ".local" / "state" / "universe.json")
+    scanner_registry = ScannerRegistry.load(
+        root / ".local" / "state" / "scanners.json",
+        scanner_definitions(settings.monitor),
+    )
     with RobinhoodReadOnlyMCPClient(
         max_calls=settings.monitor.max_mcp_calls_per_cycle
     ) as client:
@@ -328,24 +333,36 @@ def run_monitor_cycle(
             client, max_positions=settings.risk.max_positions
         )
         cached = cache.load(trading_date)
+        if cached is None or cached["event_bucket"] != refresh_bucket:
+            scanner_registry.validate_remote(client.call_tool("get_scans", {}))
         if cached is None:
-            large_candidates = scan_large_candidates(client, settings.monitor)
-            mid_candidates = scan_mid_candidates(client, settings.monitor)
-            small_candidates = scan_small_candidates(client, settings.monitor)
+            large_candidates = scan_large_candidates(
+                client, settings.monitor, scanner_registry.scan_id("large")
+            )
+            mid_candidates = scan_mid_candidates(
+                client, settings.monitor, scanner_registry.scan_id("mid")
+            )
+            small_candidates = scan_small_candidates(
+                client, settings.monitor, scanner_registry.scan_id("small")
+            )
             small_candidates = filter_small_candidates_by_median_liquidity(
                 client,
                 small_candidates,
                 settings.monitor,
                 trading_date,
             )
-            event_candidates = scan_event_candidates(client, settings.monitor)
+            event_candidates = scan_event_candidates(
+                client, settings.monitor, scanner_registry.scan_id("event")
+            )
         else:
             large_candidates = cached["large_candidates"]
             mid_candidates = cached["mid_candidates"]
             small_candidates = cached["small_candidates"]
             event_candidates = cached["event_candidates"]
             if cached["event_bucket"] != refresh_bucket:
-                event_candidates = scan_event_candidates(client, settings.monitor)
+                event_candidates = scan_event_candidates(
+                    client, settings.monitor, scanner_registry.scan_id("event")
+                )
         entries = assemble_universe(
             settings.monitor,
             account.position_symbols,

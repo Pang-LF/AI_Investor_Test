@@ -31,6 +31,7 @@ from .notification import send_or_queue
 from .robinhood_mcp import RobinhoodMCPClient
 from .robinhood_oauth import RobinhoodOAuth
 from .robinhood_readonly import get_account_snapshot
+from .scanners import provision_scanners
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +46,12 @@ def main() -> None:
     subparsers.add_parser("oauth-status")
     subparsers.add_parser("set-openai-key")
     subparsers.add_parser("account-snapshot")
+    scanner_parser = subparsers.add_parser("setup-scanners")
+    scanner_parser.add_argument(
+        "--ack",
+        required=True,
+        help='Must equal "CREATE ROBINHOOD SAVED SCANNERS".',
+    )
     email_parser = subparsers.add_parser("set-email")
     email_parser.add_argument("--sender", required=True)
     email_parser.add_argument("--recipient", required=True)
@@ -119,6 +126,33 @@ def main() -> None:
                     "output_tokens": result.output_tokens,
                     "estimated_cost_usd": round(result.estimated_cost_usd, 6),
                 }
+            )
+        )
+    elif args.command == "setup-scanners":
+        if args.ack != "CREATE ROBINHOOD SAVED SCANNERS":
+            raise RuntimeError("Exact saved-scanner acknowledgement is required")
+        with RobinhoodMCPClient(
+            max_calls=10,
+            allowed_tools={"get_scans", "create_scan", "run_scan"},
+            allow_order_submission=False,
+            allow_scanner_configuration=True,
+        ) as client:
+            registry = provision_scanners(
+                client,
+                settings.monitor,
+                ROOT / ".local" / "state" / "scanners.json",
+            )
+        print(
+            json.dumps(
+                {
+                    key: {
+                        "scan_id": "…" + record.scan_id[-8:],
+                        "title": record.title,
+                        "fingerprint": record.fingerprint[:12],
+                    }
+                    for key, record in registry.records.items()
+                },
+                indent=2,
             )
         )
     elif args.command == "set-email":

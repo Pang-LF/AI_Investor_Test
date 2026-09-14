@@ -11,15 +11,15 @@ from .robinhood_oauth import MCP_URL, RobinhoodOAuth
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
-# Phase 1 deliberately exposes only calls required by the monitor.
-# preview_scan is explicitly non-persistent in Robinhood's tool contract.
+# The recurring monitor can execute saved scans but cannot create or alter them.
 MONITOR_READ_ONLY_TOOLS: FrozenSet[str] = frozenset(
     {
         "get_accounts",
         "get_equity_positions",
         "get_equity_quotes",
         "get_equity_historicals",
-        "preview_scan",
+        "get_scans",
+        "run_scan",
     }
 )
 
@@ -43,6 +43,7 @@ ORDER_REVIEW_TOOLS: FrozenSet[str] = frozenset({"review_equity_order"})
 ORDER_WRITE_TOOLS: FrozenSet[str] = frozenset(
     {"place_equity_order", "cancel_equity_order"}
 )
+SCANNER_CONFIGURATION_TOOLS: FrozenSet[str] = frozenset({"create_scan"})
 
 KNOWN_MUTATING_TOOLS: FrozenSet[str] = frozenset(
     {
@@ -132,12 +133,14 @@ class RobinhoodMCPClient:
         max_calls: int,
         allowed_tools: Iterable[str],
         allow_order_submission: bool = False,
+        allow_scanner_configuration: bool = False,
         timeout_seconds: float = 30.0,
         max_retries: int = 2,
     ) -> None:
         self.max_calls = max_calls
         self.allowed_tools = frozenset(allowed_tools)
         self.allow_order_submission = allow_order_submission
+        self.allow_scanner_configuration = allow_scanner_configuration
         self.max_retries = max_retries
         self.call_count = 0
         self._request_id = 0
@@ -218,8 +221,10 @@ class RobinhoodMCPClient:
             raise MCPError(f"Rejected non-allowlisted MCP tool: {name}")
         if name in ORDER_WRITE_TOOLS and not self.allow_order_submission:
             raise MCPError(f"Order submission is not armed for MCP tool: {name}")
+        if name in SCANNER_CONFIGURATION_TOOLS and not self.allow_scanner_configuration:
+            raise MCPError(f"Scanner configuration is not armed for MCP tool: {name}")
         if name in KNOWN_MUTATING_TOOLS and name not in (
-            ORDER_REVIEW_TOOLS | ORDER_WRITE_TOOLS
+            ORDER_REVIEW_TOOLS | ORDER_WRITE_TOOLS | SCANNER_CONFIGURATION_TOOLS
         ):
             raise MCPError(f"Unsupported mutating MCP tool: {name}")
         if self.call_count >= self.max_calls:

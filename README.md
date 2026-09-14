@@ -20,7 +20,9 @@ hard-risk-bound authorization is valid.
 
 Every 15 minutes during regular US market hours:
 
-1. A no-LLM monitor scans a 60-symbol universe and validates every quote.
+1. A no-LLM monitor runs four versioned Robinhood saved scanners, assembles a
+   60-symbol universe, and validates every quote. Scanner IDs and definition
+   fingerprints stay in the ignored local runtime directory.
 2. Three scheduled decisions are due at 09:45, 13:00, and 15:30 ET. A missed
    slot is caught up on the next eligible cycle. Deterministic move triggers may
    start up to three additional decisions per day. Every formal decision,
@@ -61,6 +63,7 @@ The full implemented data and decision flow is documented in
 .venv/bin/ai-investor check-config
 .venv/bin/ai-investor oauth-status
 .venv/bin/ai-investor account-snapshot
+.venv/bin/ai-investor setup-scanners --ack "CREATE ROBINHOOD SAVED SCANNERS"
 .venv/bin/ai-investor email-status
 .venv/bin/ai-investor monitor-cycle
 .venv/bin/ai-investor agent-cycle
@@ -83,6 +86,11 @@ not expire daily and permits strategy evolution, but any Agentic-account change
 or change to any hard-risk parameter invalidates it. Fatal background failures
 send a rate-limited email; two consecutive stale/incomplete market cycles also
 trigger an alert. No recovery or daily heartbeat emails are sent.
+
+Robinhood saved scanners are provisioned only by the explicit `setup-scanners`
+command. Recurring monitor cycles can run them but cannot create or modify
+account-side scanners. If their definitions drift from local configuration, the
+system fails closed and requests explicit reprovisioning.
 
 Email summaries are mandatory before an LLM decision can trade. Configure SMTP
 credentials interactively so the password goes only to macOS Keychain:

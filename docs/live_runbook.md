@@ -15,6 +15,15 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
+   If saved scanners have not yet been provisioned, create the four versioned
+   Robinhood scanners once. This changes only the account's scanner list and
+   grants no order permission:
+
+   ```bash
+   .venv/bin/ai-investor setup-scanners \
+     --ack "CREATE ROBINHOOD SAVED SCANNERS"
+   ```
+
 3. Confirm both config gates in `config/settings.toml`:
 
    ```toml

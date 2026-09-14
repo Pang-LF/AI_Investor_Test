@@ -55,7 +55,8 @@ class SafetyTests(unittest.TestCase):
                 "get_equity_positions",
                 "get_equity_quotes",
                 "get_equity_historicals",
-                "preview_scan",
+                "get_scans",
+                "run_scan",
             },
         )
 
@@ -237,7 +238,7 @@ class SafetyTests(unittest.TestCase):
                 "notification_required=true\n"
                 "[monitor]\n"
                 "interval_minutes=15\nuniverse_size=60\nquote_batch_size=20\n"
-                "max_mcp_calls_per_cycle=13\nquote_batch_delay_seconds=1.0\n"
+                "max_mcp_calls_per_cycle=14\nquote_batch_delay_seconds=1.0\n"
                 "max_quote_age_minutes=30\n"
                 'market_timezone="America/New_York"\n'
                 "large_target=15\nmid_target=12\nsmall_target=8\n"
