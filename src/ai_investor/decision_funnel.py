@@ -111,8 +111,10 @@ def finalize_candidate_funnel(
     target_weights: Mapping[str, float],
     orders: Sequence[Mapping[str, Any]],
 ) -> list[Dict[str, Any]]:
-    order_symbols = {
-        str(order.get("symbol") or order.get("ticker") or "").upper()
+    order_statuses = {
+        str(order.get("symbol") or order.get("ticker") or "").upper(): str(
+            order.get("status") or "unknown"
+        )
         for order in orders
     }
     finalized: list[Dict[str, Any]] = []
@@ -124,8 +126,8 @@ def finalize_candidate_funnel(
         failures = list(investment_failures.get(symbol, ()))
         target = float(target_weights.get(symbol, 0.0))
         holding = holding_decisions.get(symbol, {})
-        if symbol in order_symbols:
-            disposition = "order_generated"
+        if symbol in order_statuses:
+            disposition = f"order_{order_statuses[symbol]}"
         elif target > 0 and holding:
             disposition = "retained_no_rebalance"
         elif target > 0:

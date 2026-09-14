@@ -77,8 +77,10 @@ def build_decision_email(
     }
     gate_failures = investment_eligibility_failures or {}
     holding_statuses = holding_decisions or {}
-    order_symbols = {
-        str(item.get("symbol") or item.get("ticker") or "").upper()
+    order_statuses = {
+        str(item.get("symbol") or item.get("ticker") or "").upper(): str(
+            item.get("status") or "unknown"
+        )
         for item in orders
     }
     lines = [
@@ -122,11 +124,20 @@ def build_decision_email(
                 f"target weight={target:.2%}"
             )
         elif target > 0 and holding_state == "holding_gate_passed":
-            action_reason = (
-                f"REBALANCED: target weight={target:.2%}"
-                if forecast.symbol in order_symbols
-                else f"RETAINED_NO_REBALANCE: target weight={target:.2%}"
-            )
+            order_status = order_statuses.get(forecast.symbol)
+            if order_status == "submitted":
+                action_reason = (
+                    f"REBALANCE_ORDER_SUBMITTED: target weight={target:.2%}"
+                )
+            elif order_status:
+                action_reason = (
+                    f"RETAINED_REBALANCE_NOT_SUBMITTED: status={order_status}; "
+                    f"target weight={target:.2%}"
+                )
+            else:
+                action_reason = (
+                    f"RETAINED_NO_REBALANCE: target weight={target:.2%}"
+                )
         elif verdict != "allow":
             action_reason = f"NOT SELECTED: LLM verdict={verdict}"
         elif gate_failures.get(forecast.symbol):
