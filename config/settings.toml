@@ -1,6 +1,6 @@
 mode = "LIVE"
 live_trading = true
-strategy_version = "strategy_v0.6.3"
+strategy_version = "strategy_v0.7.0"
 prompt_version = "research_v0.3.1"
 openai_model = "gpt-5.6-terra"
 max_input_tokens = 40000
@@ -92,6 +92,15 @@ max_abs_model_prediction_20d = 0.50
 [research]
 deep_candidate_count = 5
 max_sec_symbols_per_run = 2
+
+[event_engine]
+enabled = true
+live_entry_enabled = false
+maximum_candidates = 5
+minimum_absolute_move = 0.02
+strong_move_threshold = 0.08
+minimum_analog_samples = 30
+shrinkage_prior_samples = 50
 
 [portfolio]
 max_invested_fraction = 1.0

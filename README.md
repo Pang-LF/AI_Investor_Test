@@ -36,6 +36,9 @@ Every 15 minutes during regular US market hours:
    earnings/news and which two get bounded SEC filing research. The LLM can allow
    or veto; it cannot size an order.
    Critical data conflicts are separated from quarantined non-critical fields.
+   A separate shadow-only Event Engine prioritizes abnormal movers and supplies
+   empirical 1-/5-day analog distributions to the same research call. Its output
+   cannot create a target weight or authorize an order.
 5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
    per-sector strategy soft caps and creates target weights including cash.
    No-trade and 100% cash are valid outputs. Existing holdings use lower hold
@@ -53,7 +56,7 @@ did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.6.3.yaml`](strategies/agentic/strategy_v0.6.3.yaml).
+[`strategies/agentic/strategy_v0.7.0.yaml`](strategies/agentic/strategy_v0.7.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -80,6 +83,7 @@ The full implemented data and decision flow is documented in
 .venv/bin/ai-investor monitor-cycle
 .venv/bin/ai-investor agent-cycle
 .venv/bin/ai-investor live-status
+.venv/bin/ai-investor event-shadow-status
 .venv/bin/python scripts/opportunity_capture_audit.py
 .venv/bin/python -m unittest discover -s tests -v
 ```

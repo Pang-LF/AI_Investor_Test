@@ -4,7 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional, Sequence
 
 
 class Ledger:
@@ -107,6 +107,24 @@ class Ledger:
             );
             CREATE INDEX IF NOT EXISTS security_event_validity_idx
                 ON security_event_state(status, valid_until);
+
+            CREATE TABLE IF NOT EXISTS event_shadow_signals (
+                signal_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                trading_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                signal_price REAL NOT NULL,
+                benchmark_price REAL NOT NULL,
+                beta_to_spy REAL NOT NULL,
+                forecast_json TEXT NOT NULL,
+                realized_excess_1d REAL,
+                realized_excess_5d REAL,
+                resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS event_shadow_resolution_idx
+                ON event_shadow_signals(trading_date, realized_excess_5d);
             """
         )
         columns = {
@@ -290,6 +308,117 @@ class Ledger:
             ),
         )
         self.connection.commit()
+
+    def record_event_shadow_signals(
+        self,
+        run_id: str,
+        trading_date: str,
+        forecasts: Sequence[Mapping[str, Any]],
+    ) -> int:
+        inserted = 0
+        for forecast in forecasts:
+            symbol = str(forecast.get("symbol") or "").upper()
+            engine = str(forecast.get("engine_version") or "unknown")
+            if not symbol:
+                continue
+            signal_id = f"{trading_date}|{symbol}|{engine}"
+            cursor = self.connection.execute(
+                """
+                INSERT OR IGNORE INTO event_shadow_signals(
+                    signal_id, run_id, observed_at, trading_date, symbol,
+                    event_type, signal_price, benchmark_price, beta_to_spy,
+                    forecast_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    signal_id,
+                    run_id,
+                    str(forecast.get("observed_at") or ""),
+                    trading_date,
+                    symbol,
+                    str(forecast.get("event_type") or "unknown"),
+                    float(forecast.get("observed_price") or 0.0),
+                    float(forecast.get("benchmark_price") or 0.0),
+                    float(forecast.get("beta_to_spy") or 1.0),
+                    self._json(dict(forecast)),
+                ),
+            )
+            inserted += int(cursor.rowcount > 0)
+        self.connection.commit()
+        return inserted
+
+    def resolve_event_shadow_signals(
+        self,
+        histories: Mapping[str, Sequence[Any]],
+    ) -> int:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM event_shadow_signals
+            WHERE realized_excess_5d IS NULL
+            ORDER BY trading_date, symbol
+            """
+        ).fetchall()
+        benchmark = histories.get("SPY") or []
+        benchmark_by_date = {
+            str(bar.begins_at)[:10]: float(bar.close) for bar in benchmark
+        }
+        changed = 0
+        for row in rows:
+            signal_price = float(row["signal_price"])
+            benchmark_price = float(row["benchmark_price"])
+            if signal_price <= 0 or benchmark_price <= 0:
+                continue
+            bars = histories.get(str(row["symbol"])) or []
+            future = [
+                bar for bar in bars
+                if str(bar.begins_at)[:10] > str(row["trading_date"])
+                and str(bar.begins_at)[:10] in benchmark_by_date
+            ]
+            if not future:
+                continue
+
+            def realized(index: int) -> Optional[float]:
+                if len(future) <= index:
+                    return None
+                bar = future[index]
+                date = str(bar.begins_at)[:10]
+                asset_return = float(bar.close) / signal_price - 1.0
+                benchmark_return = benchmark_by_date[date] / benchmark_price - 1.0
+                return asset_return - float(row["beta_to_spy"]) * benchmark_return
+
+            one_day = (
+                float(row["realized_excess_1d"])
+                if row["realized_excess_1d"] is not None
+                else realized(0)
+            )
+            five_day = realized(4)
+            if (
+                row["realized_excess_1d"] is not None
+                and five_day is None
+            ):
+                continue
+            self.connection.execute(
+                """
+                UPDATE event_shadow_signals
+                SET realized_excess_1d=?, realized_excess_5d=?, resolved_at=?
+                WHERE signal_id=?
+                """,
+                (
+                    one_day,
+                    five_day,
+                    datetime.now(timezone.utc).isoformat() if five_day is not None else None,
+                    row["signal_id"],
+                ),
+            )
+            changed += 1
+        self.connection.commit()
+        return changed
+
+    def event_shadow_signals(self) -> list[Dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT * FROM event_shadow_signals ORDER BY trading_date, symbol"
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def daily_order_notional(self, trading_date: str) -> float:
         row = self.connection.execute(

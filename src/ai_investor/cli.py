@@ -26,6 +26,7 @@ from .health import (
     report_operational_failure,
     sanitize_error,
 )
+from .ledger import Ledger
 from .monitor import run_monitor_cycle
 from .notification import send_or_queue
 from .robinhood_mcp import RobinhoodMCPClient
@@ -87,6 +88,7 @@ def main() -> None:
         help='Must equal "I ACCEPT LIVE TRADING RISK".',
     )
     subparsers.add_parser("live-status")
+    subparsers.add_parser("event-shadow-status")
     subparsers.add_parser("disarm-live")
     args = parser.parse_args()
 
@@ -285,6 +287,10 @@ def main() -> None:
                 "twenty_day_shadow_decisions_enabled": (
                     settings.forecast.twenty_day_shadow_decisions_enabled
                 ),
+                "event_engine_enabled": settings.event_engine.enabled,
+                "event_engine_live_entry_enabled": (
+                    settings.event_engine.live_entry_enabled
+                ),
             }
         except Exception as exc:
             payload = {
@@ -292,6 +298,31 @@ def main() -> None:
                 "reason": f"{type(exc).__name__}: {exc}",
             }
         print(json.dumps(payload, indent=2))
+    elif args.command == "event-shadow-status":
+        with Ledger(ROOT / ".local" / "state" / "ledger.sqlite") as ledger:
+            rows = ledger.event_shadow_signals()
+        resolved_1d = sum(row["realized_excess_1d"] is not None for row in rows)
+        resolved_5d = sum(row["realized_excess_5d"] is not None for row in rows)
+        latest_fields = (
+            "trading_date",
+            "observed_at",
+            "symbol",
+            "event_type",
+            "signal_price",
+            "realized_excess_1d",
+            "realized_excess_5d",
+        )
+        print(json.dumps({
+            "engine_enabled": settings.event_engine.enabled,
+            "live_entry_enabled": settings.event_engine.live_entry_enabled,
+            "signals": len(rows),
+            "resolved_1d": resolved_1d,
+            "resolved_5d": resolved_5d,
+            "latest": [
+                {field: row[field] for field in latest_fields}
+                for row in rows[-10:]
+            ],
+        }, indent=2))
     elif args.command == "disarm-live":
         path = ROOT / ".local" / "state" / "live_arm.json"
         path.unlink(missing_ok=True)

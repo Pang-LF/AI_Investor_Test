@@ -316,6 +316,42 @@ class ResearchSettings:
 
 
 @dataclass(frozen=True)
+class EventEngineSettings:
+    enabled: bool
+    live_entry_enabled: bool
+    maximum_candidates: int
+    minimum_absolute_move: float
+    strong_move_threshold: float
+    minimum_analog_samples: int
+    shrinkage_prior_samples: int
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "EventEngineSettings":
+        settings = cls(
+            enabled=bool(raw["enabled"]),
+            live_entry_enabled=bool(raw["live_entry_enabled"]),
+            maximum_candidates=int(raw["maximum_candidates"]),
+            minimum_absolute_move=float(raw["minimum_absolute_move"]),
+            strong_move_threshold=float(raw["strong_move_threshold"]),
+            minimum_analog_samples=int(raw["minimum_analog_samples"]),
+            shrinkage_prior_samples=int(raw["shrinkage_prior_samples"]),
+        )
+        if settings.live_entry_enabled:
+            raise RuntimeError("The Event Engine must remain shadow-only")
+        if not 1 <= settings.maximum_candidates <= 5:
+            raise RuntimeError("Event Engine may surface at most five candidates")
+        if not 0.01 <= settings.minimum_absolute_move <= 0.05:
+            raise RuntimeError("Event minimum move must remain between 1% and 5%")
+        if not settings.minimum_absolute_move < settings.strong_move_threshold <= 0.20:
+            raise RuntimeError("Strong-event threshold must exceed the minimum move")
+        if settings.minimum_analog_samples < 20:
+            raise RuntimeError("Event forecasts require at least twenty analog samples")
+        if settings.shrinkage_prior_samples < 20:
+            raise RuntimeError("Event forecast shrinkage prior is too small")
+        return settings
+
+
+@dataclass(frozen=True)
 class PortfolioSettings:
     max_invested_fraction: float
     soft_max_position_fraction: float
@@ -522,6 +558,7 @@ class Settings:
     monitor: MonitorSettings
     forecast: ForecastSettings
     research: ResearchSettings
+    event_engine: EventEngineSettings
     portfolio: PortfolioSettings
     risk: RiskSettings
     execution: ExecutionSettings
@@ -575,6 +612,7 @@ class Settings:
             monitor=MonitorSettings.from_dict(raw["monitor"]),
             forecast=ForecastSettings.from_dict(raw["forecast"]),
             research=ResearchSettings.from_dict(raw["research"]),
+            event_engine=EventEngineSettings.from_dict(raw["event_engine"]),
             portfolio=PortfolioSettings.from_dict(raw["portfolio"]),
             risk=RiskSettings.from_dict(raw["risk"]),
             execution=ExecutionSettings.from_dict(raw["execution"]),

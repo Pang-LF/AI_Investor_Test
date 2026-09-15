@@ -1,0 +1,82 @@
+strategy_id: agentic_single_account
+version: strategy_v0.7.0
+effective_date: 2026-09-15
+owner: system_and_user
+supersedes: strategy_v0.6.3
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  total_symbols: 60
+  context_only_etfs: 12
+  investable_observation_slots: 48
+  immutable_point_in_time_universe_snapshots: true
+
+twenty_day_engine:
+  model: pooled_beta_ridge_v0.5.0
+  status: shadow_only_for_all_buys
+  new_entry_live_enabled: false
+  existing_position_management_enabled: true
+  shadow_decisions_enabled: true
+  provisional_shadow_gates:
+    adjusted_alpha_20d_minimum: 0.005
+    calibrated_probability_minimum: 0.55
+    edge_ratio_minimum: 0.15
+  audit_status:
+    corrected_active_universe_excludes_context_etfs: true
+    rank_ic_skill_established: false
+    extreme_forecast_extrapolation_detected: true
+
+event_engine:
+  version: empirical_event_analog_v0.1
+  enabled: true
+  live_entry_enabled: false
+  maximum_candidates: 5
+  discovery_sources: [dynamic_event_bucket, intraday_price_trigger]
+  event_classes: [standard_up, strong_up, standard_down, strong_down]
+  minimum_absolute_move: 0.02
+  strong_move_threshold: 0.08
+  forecast_horizons_days: [1, 5]
+  outcomes: beta_adjusted_excess_vs_spy
+  robustness:
+    hard_cap: {1d: 0.20, 5d: 0.50}
+    winsorization: [0.10, 0.90]
+    clustering: equal_weight_independent_event_dates
+    center: equal_weight_date_block_mean_and_median
+    shrinkage_prior_event_dates: 50
+    probability_prior: centered_at_50_percent
+  confidence: SHADOW_UNVALIDATED
+  portfolio_optimizer_access: false
+  order_generation_access: false
+  llm_role: experimental_context_and_event_research_priority_only
+  prospective_tracking:
+    deduplication: first_signal_per_symbol_per_day
+    stored_inputs: [timestamp, price, spy_price, beta, event_class, forecast_distribution]
+    realized_labels: [1d_excess, 5d_excess]
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.3.1
+  event_forecast_may_create_alpha: false
+  maximum_llm_calls_per_decision: 1
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-15
+    changed_by: user_and_system
+    reason: Add only the Event Engine as the next opportunity engine and keep it prospective shadow-only.
+    changes:
+      - classify_and_forecast_abnormal_price_events
+      - prioritize_event_candidates_for_existing_bounded_research
+      - persist_predictions_and_later_realized_1d_5d_excess_returns
+      - prohibit_event_forecasts_from_optimizer_and_order_generation
+      - retain_20d_buy_block_and_existing_position_live_management
+      - keep_hard_risk_policy_unchanged

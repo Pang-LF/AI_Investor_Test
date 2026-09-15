@@ -68,6 +68,7 @@ def build_decision_email(
     investment_eligibility_failures: Optional[Mapping[str, Sequence[str]]] = None,
     holding_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
     portfolio_diagnostics: Optional[Mapping[str, Any]] = None,
+    event_shadow_forecasts: Sequence[Mapping[str, Any]] = (),
     execution_calibration_approved: bool = True,
     twenty_day_new_entry_live_enabled: bool = True,
     pipeline_error: Optional[str] = None,
@@ -216,6 +217,14 @@ def build_decision_email(
         )
     lines.extend(
         [
+            "",
+            "Event Engine shadow forecasts:",
+            json.dumps(
+                list(event_shadow_forecasts),
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            ),
             "",
             "Order outcomes:",
             json.dumps(list(orders), ensure_ascii=False, indent=2, default=str),

@@ -177,6 +177,32 @@ candidates, and cash in the optimizer. No research or LLM story alone can create
 a quantitative edge. Under strategy v0.6.3 its target portfolio is a complete
 shadow record: 20D buys cannot proceed to LIVE placement.
 
+## Shadow Event Engine
+
+Strategy v0.7.0 adds a separate Event Engine without granting it capital. It
+considers investable symbols that enter the Dynamic/Event bucket or a current
+price trigger, ranks them by absolute move, and evaluates at most five per
+decision. Current moves are classified as standard/strong and up/down. For each
+class, the engine builds completed historical close-to-close analogs from the
+currently available investable histories and calculates beta-adjusted 1- and
+5-day outcome distributions.
+
+Individual analog outcomes are hard-capped, winsorized at the 10th/90th
+percentiles, clustered into equally weighted date blocks, centered on an equal
+blend of the block median and mean, and shrunk toward zero according to the
+number of independent event dates. Positive probability is shrunk toward 50%.
+Even a large sample is labelled `SHADOW_UNVALIDATED`; sample support and forecast
+validity are reported separately. Current intraday moves and completed-close
+analogs are not treated as identical, and the logs disclose the current-universe
+selection bias and missing point-in-time semantic event classification.
+
+Event signals can receive research priority and are supplied to the LLM as
+experimental context. The prompt explicitly forbids using them to establish an
+investable edge. They never enter the optimizer. SQLite keeps the first event
+signal per symbol/day with observed price, SPY price, beta and forecast; later
+cycles populate realized 1-/5-day beta-adjusted returns for prospective OOS
+evaluation.
+
 ## Persistent security state and active research
 
 SQLite preserves material security events across runs. Each event is keyed by
@@ -283,7 +309,7 @@ decision, symbol, side, and notional is sent only with placement. Retrying uses
 the same UUID. SQLite records planned, reviewed, submitted, filled, rejected, and
 reconciled states; later cycles compare broker-reported fills with positions.
 
-Strategy v0.6.3 adds an execution permission below the optimizer and broker
+Strategy v0.7.0 retains the execution permission introduced in v0.6.3 below the optimizer and broker
 review. `twenty_day_new_entry_live_enabled = false` makes every 20D buy
 shadow-only, including an increase to an existing position. The reviewed
 hypothetical is logged as `shadow_20d_buy_reviewed` and does not consume the

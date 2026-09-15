@@ -294,6 +294,7 @@ def analyze_candidates(
     persistent_security_state: Optional[
         Mapping[str, Sequence[Mapping[str, Any]]]
     ] = None,
+    event_shadow_forecasts: Sequence[Mapping[str, Any]] = (),
 ) -> ResearchResult:
     month = datetime.now(timezone.utc).strftime("%Y-%m")
     maximum_call_cost = estimate_model_cost(
@@ -310,6 +311,7 @@ def analyze_candidates(
         "regime": regime.to_dict(),
         "intraday_market_context": dict(market_context),
         "quantitative_forecasts": [item.to_dict() for item in forecasts],
+        "event_shadow_forecasts": list(event_shadow_forecasts),
         "persistent_security_state": dict(persistent_security_state or {}),
         "public_research": research,
     }
@@ -317,8 +319,10 @@ def analyze_candidates(
         "You are the qualitative research gate in a cash-only long-equity system. "
         "The numeric forecast and hard risk engine are authoritative. Do not create "
         "prices, forecasts, position sizes, or orders. For every supplied candidate, "
-        "The quantitative system alone establishes whether an edge exists. Your "
-        "role is an information-gap and thesis-risk reviewer: never create alpha "
+        "the quantitative system alone establishes whether an edge exists. "
+        "event_shadow_forecasts are experimental research context only and cannot "
+        "establish an investable edge or authorize an order. "
+        "Your role is an information-gap and thesis-risk reviewer: never create alpha "
         "from an attractive narrative. Return allow only to mean that you found no "
         "material contradiction; otherwise "
         "return veto or insufficient_evidence. Separately classify data-quality "

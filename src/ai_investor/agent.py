@@ -20,6 +20,7 @@ from .execution import (
     plan_orders,
     reconcile_orders,
 )
+from .event_engine import build_event_shadow_forecasts
 from .forecasting import (
     calibration_diagnostics,
     candidate_forecasts,
@@ -278,6 +279,23 @@ def run_agent_cycle(
             forecasts, models = forecast_assets(
                 forecast_histories, settings.forecast, models=models
             )
+            monitor_quotes = _quote_map(monitor_payload)
+            event_shadow_forecasts = build_event_shadow_forecasts(
+                histories=forecast_histories,
+                quotes=monitor_quotes,
+                entries=entries,
+                triggers=monitor.triggers,
+                settings=settings.event_engine,
+                observed_at=current.isoformat(),
+            )
+            event_shadow_resolutions = ledger.resolve_event_shadow_signals(
+                forecast_histories
+            )
+            event_shadow_insertions = ledger.record_event_shadow_signals(
+                run_id,
+                trading_date,
+                [item.to_dict() for item in event_shadow_forecasts],
+            )
             integrity_issues = model_integrity_issues(
                 forecasts, models, settings.forecast
             )
@@ -292,6 +310,7 @@ def run_agent_cycle(
                 for item in entries
                 if item.get("bucket") == "event" and item.get("symbol")
             }
+            event_symbols.update(item.symbol for item in event_shadow_forecasts)
             universe_security_state = ledger.active_security_events(
                 investable_symbols, trading_date
             )
@@ -318,10 +337,19 @@ def run_agent_cycle(
                 for symbol in continuity_order
                 if symbol in forecast_by_symbol
             ]
+            event_shadow_candidates = [
+                forecast_by_symbol[item.symbol]
+                for item in event_shadow_forecasts
+                if item.symbol in forecast_by_symbol
+            ]
             candidates = list(
                 {
                     item.symbol: item
-                    for item in continuity_candidates + ranked_candidates
+                    for item in (
+                        continuity_candidates
+                        + event_shadow_candidates
+                        + ranked_candidates
+                    )
                 }.values()
             )[: settings.forecast.research_candidate_count]
             timings["history_and_forecast_seconds"] = round(
@@ -434,9 +462,9 @@ def run_agent_cycle(
                 root,
                 sec_symbols,
                 user_agent=(
-                    f"AIInvestorTest/0.6 ({email_config.sender})"
+                    f"AIInvestorTest/0.7 ({email_config.sender})"
                     if email_config is not None
-                    else "AIInvestorTest/0.6"
+                    else "AIInvestorTest/0.7"
                 ),
                 max_symbols=settings.research.max_sec_symbols_per_run,
             )
@@ -467,6 +495,10 @@ def run_agent_cycle(
                     market_context=monitor_payload.get("market_summary") or {},
                     research=research_payload, source_tools=source_tools,
                     persistent_security_state=persistent_security_state,
+                    event_shadow_forecasts=[
+                        item.to_dict() for item in event_shadow_forecasts
+                        if item.symbol in research_symbols
+                    ],
                 )
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
@@ -643,7 +675,6 @@ def run_agent_cycle(
                     else 1.0,
                     objective_value=0.0,
                 )
-            monitor_quotes = _quote_map(monitor_payload)
             prices = {symbol: float(item.get("last_trade_price") or 0) for symbol, item in monitor_quotes.items()}
             orders = [] if integrity_issues else plan_orders(
                 decision_key=decision_key, target_weights=target.weights, state=state,
@@ -700,6 +731,9 @@ def run_agent_cycle(
                 investment_eligibility_failures=investment_failures_by_symbol,
                 holding_decisions=holding_decisions,
                 portfolio_diagnostics=target.diagnostics,
+                event_shadow_forecasts=[
+                    item.to_dict() for item in event_shadow_forecasts
+                ],
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
@@ -743,6 +777,13 @@ def run_agent_cycle(
                     "twenty_day_shadow_decisions_enabled": (
                         settings.forecast.twenty_day_shadow_decisions_enabled
                     ),
+                },
+                "event_shadow_forecasts": [
+                    item.to_dict() for item in event_shadow_forecasts
+                ],
+                "event_shadow_tracking": {
+                    "new_signals": event_shadow_insertions,
+                    "updated_realizations": event_shadow_resolutions,
                 },
                 "portfolio_eligible_stocks": [item.symbol for item in eligible],
                 "entry_eligible_stocks": [item.symbol for item in entry_eligible],
