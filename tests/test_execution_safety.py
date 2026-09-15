@@ -9,6 +9,7 @@ from ai_investor.config import PortfolioSettings, RiskSettings
 from ai_investor.execution import (
     BrokerState,
     Position,
+    PlannedOrder,
     arm_live,
     assert_live_armed,
     deterministic_ref_id,
@@ -217,6 +218,22 @@ class ExecutionSafetyTests(unittest.TestCase):
                 self.assertEqual(row["status"], "submitted")
                 self.assertEqual(ledger.daily_order_count("2026-01-01"), 1)
 
+    def test_failed_pre_submission_orders_do_not_consume_daily_limits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with Ledger(Path(directory) / "ledger.sqlite") as ledger:
+                for index, status in enumerate(
+                    ("review_rejected", "review_failed", "placement_failed")
+                ):
+                    ledger.upsert_order(
+                        ref_id=f"failed-{index}", decision_key=f"d-{index}",
+                        trading_date="2026-01-01", mode="LIVE", symbol="SPY",
+                        side="buy", order_type="market", quantity=None,
+                        dollar_amount="100.00", planned_notional=100,
+                        status=status,
+                    )
+                self.assertEqual(ledger.daily_order_count("2026-01-01"), 0)
+                self.assertEqual(ledger.daily_order_notional("2026-01-01"), 0)
+
     def test_holding_exit_confirmation_is_idempotent_per_decision(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             with Ledger(Path(directory) / "ledger.sqlite") as ledger:
@@ -411,6 +428,93 @@ class ExecutionSafetyTests(unittest.TestCase):
                 self.assertEqual(result[0]["status"], "hypothetical_reviewed")
                 self.assertEqual([name for name, _ in client.calls], ["review_equity_order"])
                 self.assertNotIn("ref_id", client.calls[0][1])
+
+    def test_fractional_sell_is_floored_to_six_decimal_places(self) -> None:
+        class FakeClient:
+            def __init__(self):
+                self.arguments = None
+
+            def call_tool(self, name, arguments):
+                self.assert_review(name)
+                self.arguments = arguments
+                return {"data": {"order_checks": {}}}
+
+            @staticmethod
+            def assert_review(name):
+                if name != "review_equity_order":
+                    raise AssertionError("Shadow execution attempted a write")
+
+        settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        settings = replace(settings, mode="SHADOW", live_trading=False)
+        now = datetime.now(timezone.utc)
+        order = PlannedOrder(
+            ref_id="fractional-sell", decision_key="fractional-sell",
+            symbol="AVAV", side="sell", planned_notional=16.28,
+            quantity=0.11141349,
+        )
+        state = BrokerState(
+            "account", 1000, 950, 0, 0, 0,
+            (Position("AVAV", 0.331622, 48.46, 0.331622),),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with Ledger(Path(directory) / "ledger.sqlite") as ledger:
+                client = FakeClient()
+                execute_orders(
+                    settings=settings, root=Path(directory), ledger=ledger,
+                    client=client, state=state, orders=[order],
+                    quotes={"AVAV": {
+                        "last_trade_price": 146.13, "bid_price": 146.10,
+                        "ask_price": 146.15,
+                        "venue_last_trade_time": now.isoformat(),
+                    }},
+                    tradability={"AVAV": True}, trading_date="2026-01-01",
+                    now=now,
+                )
+                self.assertEqual(client.arguments["quantity"], "0.111413")
+                self.assertEqual(
+                    ledger.get_order("fractional-sell")["quantity"], "0.111413"
+                )
+
+    def test_placement_exception_is_recorded_before_reraising(self) -> None:
+        class FakeClient:
+            def call_tool(self, name, arguments):
+                if name == "review_equity_order":
+                    return {"data": {"order_checks": {}}}
+                if name == "place_equity_order":
+                    raise RuntimeError("broker rejected test order")
+                raise AssertionError(name)
+
+        settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        now = datetime.now(timezone.utc)
+        order = PlannedOrder(
+            ref_id="failed-placement", decision_key="failed-placement",
+            symbol="AVAV", side="sell", planned_notional=16.28,
+            quantity=0.11141349,
+        )
+        state = BrokerState(
+            "account", 1000, 950, 0, 0, 0,
+            (Position("AVAV", 0.331622, 48.46, 0.331622),),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_live(root, "account", settings)
+            with Ledger(root / "ledger.sqlite") as ledger:
+                with self.assertRaisesRegex(RuntimeError, "broker rejected"):
+                    execute_orders(
+                        settings=settings, root=root, ledger=ledger,
+                        client=FakeClient(), state=state, orders=[order],
+                        quotes={"AVAV": {
+                            "last_trade_price": 146.13, "bid_price": 146.10,
+                            "ask_price": 146.15,
+                            "venue_last_trade_time": now.isoformat(),
+                        }},
+                        tradability={"AVAV": True}, trading_date="2026-01-01",
+                        now=now,
+                    )
+                row = ledger.get_order("failed-placement")
+                self.assertEqual(row["status"], "placement_failed")
+                self.assertEqual(row["quantity"], "0.111413")
+                self.assertIn("broker rejected test order", row["response_json"])
 
 
 if __name__ == "__main__":

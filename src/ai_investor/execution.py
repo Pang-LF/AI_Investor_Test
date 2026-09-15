@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import asdict, dataclass, is_dataclass
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Sequence
@@ -278,6 +279,11 @@ def execute_orders(
 ) -> list[Dict[str, Any]]:
     results: list[Dict[str, Any]] = []
     for order in orders:
+        formatted_quantity = (
+            _format_fractional_quantity(order.quantity)
+            if order.side == "sell" and order.quantity is not None
+            else None
+        )
         summary = {
             "ref_id": order.ref_id,
             "symbol": order.symbol,
@@ -313,7 +319,7 @@ def execute_orders(
             ref_id=order.ref_id, decision_key=order.decision_key,
             trading_date=trading_date, mode=settings.mode, symbol=order.symbol,
             side=order.side, order_type=settings.execution.order_type,
-            quantity=f"{order.quantity:.8f}" if order.quantity is not None else None,
+            quantity=formatted_quantity,
             dollar_amount=f"{order.planned_notional:.2f}" if order.side == "buy" else None,
             planned_notional=order.planned_notional, status=status,
             response={"risk": risk.to_dict()},
@@ -332,8 +338,20 @@ def execute_orders(
         if order.side == "buy":
             arguments["dollar_amount"] = f"{order.planned_notional:.2f}"
         else:
-            arguments["quantity"] = f"{order.quantity:.8f}"
-        review = client.call_tool("review_equity_order", arguments)
+            arguments["quantity"] = formatted_quantity
+        try:
+            review = client.call_tool("review_equity_order", arguments)
+        except Exception as exc:
+            ledger.upsert_order(
+                ref_id=order.ref_id, decision_key=order.decision_key,
+                trading_date=trading_date, mode=settings.mode, symbol=order.symbol,
+                side=order.side, order_type=settings.execution.order_type,
+                quantity=arguments.get("quantity"),
+                dollar_amount=arguments.get("dollar_amount"),
+                planned_notional=order.planned_notional, status="review_failed",
+                response={"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            raise
         checks = _data(review).get("order_checks") or {}
         if _review_has_failure(checks):
             ledger.upsert_order(
@@ -358,7 +376,19 @@ def execute_orders(
         assert_live_armed(settings, root, state.account_number, trading_date)
         placement_arguments = dict(arguments)
         placement_arguments["ref_id"] = order.ref_id
-        placed = client.call_tool("place_equity_order", placement_arguments)
+        try:
+            placed = client.call_tool("place_equity_order", placement_arguments)
+        except Exception as exc:
+            ledger.upsert_order(
+                ref_id=order.ref_id, decision_key=order.decision_key,
+                trading_date=trading_date, mode=settings.mode, symbol=order.symbol,
+                side=order.side, order_type=settings.execution.order_type,
+                quantity=arguments.get("quantity"),
+                dollar_amount=arguments.get("dollar_amount"),
+                planned_notional=order.planned_notional, status="placement_failed",
+                response={"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            raise
         placed_data = _data(placed)
         placed_order = placed_data.get("order") or placed_data
         broker_id = str(
@@ -443,3 +473,16 @@ def _number(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _format_fractional_quantity(quantity: float) -> str:
+    """Format a sell quantity to Robinhood's six-decimal maximum without overselling."""
+    try:
+        value = Decimal(str(quantity)).quantize(
+            Decimal("0.000001"), rounding=ROUND_DOWN
+        )
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError("Sell quantity is invalid") from exc
+    if not value.is_finite() or value <= 0:
+        raise ValueError("Sell quantity rounds to zero or is invalid")
+    return format(value, "f").rstrip("0").rstrip(".")

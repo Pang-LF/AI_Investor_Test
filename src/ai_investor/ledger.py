@@ -296,7 +296,10 @@ class Ledger:
             """
             SELECT COALESCE(SUM(planned_notional), 0) AS value
             FROM orders
-            WHERE trading_date=? AND status NOT IN ('blocked','cancelled','rejected','failed')
+            WHERE trading_date=? AND status NOT IN (
+                'blocked','cancelled','rejected','failed',
+                'review_rejected','review_failed','placement_failed'
+            )
             """,
             (trading_date,),
         ).fetchone()
@@ -306,7 +309,10 @@ class Ledger:
         row = self.connection.execute(
             """
             SELECT COUNT(*) AS count FROM orders
-            WHERE trading_date=? AND status NOT IN ('blocked','cancelled','rejected','failed')
+            WHERE trading_date=? AND status NOT IN (
+                'blocked','cancelled','rejected','failed',
+                'review_rejected','review_failed','placement_failed'
+            )
             """,
             (trading_date,),
         ).fetchone()
