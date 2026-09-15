@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import time
@@ -116,6 +117,27 @@ class UniverseCache:
             "event_candidates": entries_to_json(event_candidates),
             "entries": entries_to_json(entries),
         }
+        # Keep immutable point-in-time compositions for future opportunity
+        # audits. The digest suppresses identical 15-minute snapshots while
+        # preserving any morning/afternoon, event, or holdings-driven change.
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:12]
+        snapshot_payload = {
+            **payload,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+        snapshot_path = (
+            self.path.parent
+            / "universe_snapshots"
+            / f"{trading_date}_{event_bucket}_{digest}.json"
+        )
+        if not snapshot_path.exists():
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+            snapshot_temporary = snapshot_path.with_suffix(".tmp")
+            snapshot_temporary.write_text(
+                json.dumps(snapshot_payload, indent=2), encoding="utf-8"
+            )
+            snapshot_temporary.replace(snapshot_path)
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         temporary.replace(self.path)

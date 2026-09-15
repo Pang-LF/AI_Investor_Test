@@ -76,8 +76,14 @@ The full implemented data and decision flow is documented in
 .venv/bin/ai-investor monitor-cycle
 .venv/bin/ai-investor agent-cycle
 .venv/bin/ai-investor live-status
+.venv/bin/python scripts/opportunity_capture_audit.py
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+The opportunity-capture audit is read-only: it fetches daily price history, does
+not call the LLM, and cannot submit orders. Monitor cycles also retain deduplicated
+point-in-time universe compositions under ignored local state so later audits do
+not have to project today's 60-name selection backward onto history.
 
 Install or refresh the 15-minute macOS LaunchAgent:
 

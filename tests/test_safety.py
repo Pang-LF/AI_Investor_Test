@@ -1,3 +1,4 @@
+import json
 import os
 import tempfile
 import unittest
@@ -154,6 +155,23 @@ class SafetyTests(unittest.TestCase):
             loaded = cache.load("2026-09-10")
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded["event_candidates"], [])
+            snapshots = list(
+                (Path(directory) / "universe_snapshots").glob(
+                    "2026-09-10_afternoon_*.json"
+                )
+            )
+            self.assertEqual(len(snapshots), 1)
+            snapshot = json.loads(snapshots[0].read_text(encoding="utf-8"))
+            self.assertEqual(snapshot["trading_date"], "2026-09-10")
+            self.assertIn("captured_at", snapshot)
+
+            # An unchanged composition is deduplicated rather than creating a
+            # new file on every 15-minute monitor cycle.
+            cache.save("2026-09-10", "afternoon", large, mid, small, [], [])
+            self.assertEqual(
+                len(list((Path(directory) / "universe_snapshots").glob("*.json"))),
+                1,
+            )
 
     def test_historical_cache_is_bound_to_requested_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
