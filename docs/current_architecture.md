@@ -17,8 +17,8 @@ The top-level sequence is:
 2. Sixty-symbol observation cycle with zero LLM calls.
 3. Local deterministic trigger decision.
 4. Account-state read and previous-order reconciliation.
-5. Frozen daily model snapshot, OOS calibration, and research-candidate selection.
-6. Public research collection and one structured LLM call.
+5. Frozen core daily model snapshot, plus 200-name shadow discovery.
+6. Cached-or-fresh public research and at most one structured LLM call.
 7. Portfolio optimization with cash.
 8. Fresh-quote, price-drift, account, and hard-risk validation.
 9. Robinhood order review, followed by an engine-specific execution-permission gate.
@@ -93,6 +93,40 @@ up to three decisions per trading day. Every scheduled or triggered formal
 decision shares a global 60-minute minimum interval. SQLite stores distinct
 time-specific keys and suppresses duplicate decisions.
 
+## Two-tier research coverage
+
+Strategy v0.8.0 keeps high-frequency Robinhood quote monitoring at 60 symbols,
+but uses the cached large-, mid-, small-, and event-scanner candidate lists to
+construct a separate 200-stock research universe for each formal decision.
+Current positions enter first; event and smaller-company candidates receive
+reserved diversity before liquid mid- and large-cap names fill the remainder.
+Issuer deduplication and a 25-name broad sector ceiling remain active. The
+current scanner cache contains more than 400 distinct eligible candidates, so
+the builder fails instead of reducing the confirmed 200-name target.
+
+The 200-name tier uses completed daily bars, not 15-minute quotes. Models are
+still trained and frozen from the original 60-name observation universe's
+investable core and SPY benchmark, then the frozen model is applied to the broad
+histories. Consequently, expanding discovery cannot alter
+same-day coefficients, calibration, or the forecast used for an existing LIVE
+holding. A name outside the 60-symbol core is labelled
+`broad_research_shadow_only` and cannot enter the shared portfolio optimizer.
+This prevents a hypothetical broad buy from causing a real sale that raises cash
+for an order the shadow gate would refuse to place.
+
+Up to 25 broad names form the quantitative research shortlist. Current holdings
+and the top five remain in scope. A maximum of five names per run may receive
+fresh LLM research; when those top names already have valid cached assessments,
+the unused capacity rotates into previously unreviewed shortlist names.
+
+Each per-symbol assessment is stored in SQLite for 390 minutes. Reuse requires
+the same trading date, model, prompt, daily forecast version, persistent event
+state, and material price-event class. A direction reversal or crossing among
+the 2–5%, 5–10%, and 10%+ event bands invalidates the cache. A new trading day,
+new durable fact, model change, prompt change, or expired TTL also requires a
+fresh review. Intraday noise within the same event band does not. Cached-only
+decisions make zero LLM calls and report zero LLM cost.
+
 ## Quantitative prediction
 
 The prediction layer requests 1,095 calendar days of Robinhood daily bars but excludes
@@ -137,11 +171,12 @@ from one date from masquerading as dozens of independent observations. A
 separate normal-error raw probability is retained only for inexpensive research
 qualification.
 
-The decision funnel has three levels. Level 1 sends at most five new names to
-research when raw shrunk 20-day alpha is at least 0.5% and raw probability is at
-least 48%; Dynamic/Event names can enter research without passing that gate.
-This is permission to spend research cost, never permission to buy. Current
-holdings are added first so they receive explicit retain/exit review.
+The decision funnel has three levels. Level 1 builds a 25-name shortlist when
+raw shrunk 20-day alpha is at least 0.5% and raw probability is at least 48%;
+Dynamic/Event names can enter research without passing that gate. At most five
+names receive fresh LLM research in one run, while valid cached assessments are
+reused. This is permission to spend research cost, never permission to buy.
+Current holdings are added first so they receive explicit retain/exit review.
 
 Entry and holding rules are asymmetric. A hypothetical new position must pass
 the full Level 2 entry gate before appearing in the 20D shadow target. An existing
@@ -165,7 +200,7 @@ Each email labels a seven-block calibration as LOW confidence and reports a
 date-clustered 95% interval rather than presenting the empirical point estimate
 as precise certainty.
 
-The decision log also records every one of the 60 observation slots in a
+The decision log records all 200 broad research stocks plus the 12 context ETFs in a
 candidate funnel: bucket, investability, forecast availability, research gate,
 rank/capacity outcome, LLM verdict, investment-eligibility failures, target
 weight, and final order/no-order disposition. This makes trigger attrition and
@@ -174,12 +209,12 @@ five names.
 
 Level 3 makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
-a quantitative edge. Under strategy v0.6.3 its target portfolio is a complete
+a quantitative edge. Under strategy v0.8.0 its new-buy target portfolio is a complete
 shadow record: 20D buys cannot proceed to LIVE placement.
 
 ## Shadow Event Engine
 
-Strategy v0.7.0 adds a separate Event Engine without granting it capital. It
+Strategy v0.8.0 retains the separate Event Engine without granting it capital. It
 considers investable symbols that enter the Dynamic/Event bucket or a current
 price trigger, ranks them by absolute move, and evaluates at most five per
 decision. Current moves are classified as standard/strong and up/down. For each
@@ -309,7 +344,7 @@ decision, symbol, side, and notional is sent only with placement. Retrying uses
 the same UUID. SQLite records planned, reviewed, submitted, filled, rejected, and
 reconciled states; later cycles compare broker-reported fills with positions.
 
-Strategy v0.7.0 retains the execution permission introduced in v0.6.3 below the optimizer and broker
+Strategy v0.8.0 retains the execution permission introduced in v0.6.3 below the optimizer and broker
 review. `twenty_day_new_entry_live_enabled = false` makes every 20D buy
 shadow-only, including an increase to an existing position. The reviewed
 hypothetical is logged as `shadow_20d_buy_reviewed` and does not consume the

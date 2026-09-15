@@ -44,7 +44,7 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
-No daily terminal command is required after this. Strategy v0.7.0 keeps monitoring,
+No daily terminal command is required after this. Strategy v0.8.0 keeps monitoring,
 forecasting, research, and hypothetical optimization active, but sets
 `twenty_day_new_entry_live_enabled = false`. Every 20D buy stops after Robinhood
 review and is recorded as `shadow_20d_buy_reviewed`; the placement tool is never
@@ -58,6 +58,16 @@ change which abnormal movers receive the bounded research call, but it does not
 enter portfolio optimization. Its first signal per symbol/day is stored with
 the contemporaneous price, SPY price, beta, forecast distribution, and later
 realized 1-/5-day excess returns.
+
+The 15-minute monitor still requests quotes for exactly 60 symbols. Formal
+decisions additionally construct a 200-stock daily-bar research universe from
+the already cached scanner results. That broad tier is shadow discovery: models
+are still fitted/frozen on the 60-name core, so expanding research cannot change
+the model used for existing-position LIVE management. A 25-name quantitative
+shortlist feeds a maximum of five fresh LLM reviews per run. Same-day assessments
+are reused for 390 minutes unless a material event signature changes. Names that
+are outside the 60-symbol core cannot enter the portfolio optimizer or order
+generation; expanding research therefore cannot trigger a compensating LIVE sale.
 
 The 15-minute monitor schedules three formal decisions at 09:45, 13:00, and
 15:30 ET and permits up to three additional event-triggered decisions. All six

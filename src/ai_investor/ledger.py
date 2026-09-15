@@ -125,6 +125,18 @@ class Ledger:
             );
             CREATE INDEX IF NOT EXISTS event_shadow_resolution_idx
                 ON event_shadow_signals(trading_date, realized_excess_5d);
+
+            CREATE TABLE IF NOT EXISTS research_assessment_cache (
+                symbol TEXT PRIMARY KEY,
+                context_signature TEXT NOT NULL,
+                researched_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                model TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                assessment_json TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS research_assessment_expiry_idx
+                ON research_assessment_cache(expires_at);
             """
         )
         columns = {
@@ -419,6 +431,101 @@ class Ledger:
             "SELECT * FROM event_shadow_signals ORDER BY trading_date, symbol"
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def cached_research_assessments(
+        self,
+        context_signatures: Mapping[str, str],
+        as_of: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        if not context_signatures:
+            return {}
+        placeholders = ",".join("?" for _ in context_signatures)
+        rows = self.connection.execute(
+            f"""
+            SELECT * FROM research_assessment_cache
+            WHERE symbol IN ({placeholders}) AND expires_at>?
+            """,
+            (*sorted(context_signatures), as_of),
+        ).fetchall()
+        cached: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            symbol = str(row["symbol"])
+            if str(row["context_signature"]) != context_signatures.get(symbol):
+                continue
+            try:
+                assessment = json.loads(str(row["assessment_json"]))
+            except (json.JSONDecodeError, TypeError):
+                continue
+            cached[symbol] = {
+                "assessment": assessment,
+                "researched_at": str(row["researched_at"]),
+                "expires_at": str(row["expires_at"]),
+                "model": str(row["model"]),
+                "prompt_version": str(row["prompt_version"]),
+            }
+        return cached
+
+    def store_research_assessments(
+        self,
+        assessments: Sequence[Mapping[str, Any]],
+        context_signatures: Mapping[str, str],
+        *,
+        researched_at: str,
+        expires_at: str,
+        model: str,
+        prompt_version: str,
+    ) -> int:
+        stored = 0
+        for assessment in assessments:
+            symbol = str(assessment.get("symbol") or "").upper()
+            signature = context_signatures.get(symbol)
+            if not symbol or not signature:
+                continue
+            self.connection.execute(
+                """
+                INSERT INTO research_assessment_cache(
+                    symbol, context_signature, researched_at, expires_at,
+                    model, prompt_version, assessment_json
+                ) VALUES(?,?,?,?,?,?,?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    context_signature=excluded.context_signature,
+                    researched_at=excluded.researched_at,
+                    expires_at=excluded.expires_at,
+                    model=excluded.model,
+                    prompt_version=excluded.prompt_version,
+                    assessment_json=excluded.assessment_json
+                """,
+                (
+                    symbol,
+                    signature,
+                    researched_at,
+                    expires_at,
+                    model,
+                    prompt_version,
+                    self._json(dict(assessment)),
+                ),
+            )
+            stored += 1
+        self.connection.commit()
+        return stored
+
+    def research_assessment_cache_status(self, as_of: str) -> Dict[str, Any]:
+        rows = self.connection.execute(
+            """
+            SELECT symbol, researched_at, expires_at, model, prompt_version,
+                   CASE WHEN expires_at>? THEN 1 ELSE 0 END AS valid
+            FROM research_assessment_cache
+            ORDER BY researched_at DESC, symbol
+            """,
+            (as_of,),
+        ).fetchall()
+        items = [dict(row) for row in rows]
+        return {
+            "total": len(items),
+            "valid": sum(int(item["valid"]) for item in items),
+            "expired": sum(not int(item["valid"]) for item in items),
+            "latest": items[:20],
+        }
 
     def daily_order_notional(self, trading_date: str) -> float:
         row = self.connection.execute(

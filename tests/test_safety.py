@@ -22,12 +22,37 @@ from ai_investor.robinhood_readonly import READ_ONLY_TOOLS, WRITE_TOOLS
 from ai_investor.universe import (
     UniverseEntry,
     _rank_core,
+    assemble_research_universe,
     assemble_universe,
     filter_small_candidates_by_median_liquidity,
 )
 
 
 class SafetyTests(unittest.TestCase):
+    def test_broad_research_universe_has_two_hundred_unique_stocks(self) -> None:
+        def candidates(prefix: str, bucket: str, count: int) -> list[UniverseEntry]:
+            return [
+                UniverseEntry(
+                    symbol=f"{prefix}{index}",
+                    bucket=bucket,
+                    sector=str(index % 9),
+                    issuer=f"{prefix} issuer {index}",
+                )
+                for index in range(count)
+            ]
+
+        result = assemble_research_universe(
+            200,
+            ["HELD"],
+            candidates("L", "large", 200),
+            candidates("M", "mid", 200),
+            candidates("S", "small", 30),
+            candidates("E", "event", 30),
+        )
+        self.assertEqual(len(result), 200)
+        self.assertEqual(len({item.symbol for item in result}), 200)
+        self.assertEqual(result[0].symbol, "HELD")
+
     def test_core_ranking_does_not_use_recent_return(self) -> None:
         def row(change: float) -> dict:
             return {
@@ -302,6 +327,8 @@ class SafetyTests(unittest.TestCase):
                 "holding_exit_confirmation_runs=2\n"
                 "max_abs_forecast_20d=0.08\n"
                 "[research]\ndeep_candidate_count=1\nmax_sec_symbols_per_run=1\n"
+                "quantitative_universe_size=200\nquantitative_shortlist_size=25\n"
+                "assessment_ttl_minutes=390\nmax_fresh_llm_symbols_per_run=5\n"
                 "[event_engine]\nenabled=true\nlive_entry_enabled=false\n"
                 "maximum_candidates=5\nminimum_absolute_move=0.02\n"
                 "strong_move_threshold=0.08\nminimum_analog_samples=30\n"

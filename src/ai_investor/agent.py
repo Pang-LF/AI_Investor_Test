@@ -4,7 +4,7 @@ import json
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, time as clock_time, timezone
+from datetime import datetime, time as clock_time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from zoneinfo import ZoneInfo
@@ -35,7 +35,7 @@ from .forecasting import (
 from .health import clear_operational_failures, report_operational_failure
 from .ledger import Ledger
 from .market_data import HistoricalCache, get_daily_histories
-from .monitor import run_monitor_cycle
+from .monitor import UniverseCache, run_monitor_cycle
 from .model_snapshot import get_or_create_daily_models
 from .notification import (
     build_decision_email,
@@ -47,14 +47,17 @@ from .notification import (
 from .portfolio import TargetPortfolio, optimize_portfolio
 from .public_filings import collect_sec_filings
 from .research import (
+    ResearchResult,
     allowed_symbols,
     analyze_candidates,
     collect_research,
     persist_security_facts,
     plan_deep_research,
     plan_sec_research,
+    research_context_signature,
 )
 from .robinhood_mcp import RobinhoodMCPClient
+from .universe import assemble_research_universe, entries_to_json
 
 
 @dataclass(frozen=True)
@@ -235,7 +238,42 @@ def run_agent_cycle(
                 {position.symbol for position in state.positions}
             )
             entries = monitor_payload.get("universe") or []
-            symbols = list(dict.fromkeys([str(item.get("symbol", "")).upper() for item in entries if item.get("symbol")] + [p.symbol for p in state.positions]))
+            cached_universe = UniverseCache(
+                root / ".local" / "state" / "universe.json"
+            ).load(trading_date)
+            if cached_universe is None:
+                raise RuntimeError(
+                    "Broad research universe unavailable after monitor refresh"
+                )
+            broad_entries = assemble_research_universe(
+                settings.research.quantitative_universe_size,
+                [position.symbol for position in state.positions],
+                cached_universe["large_candidates"],
+                cached_universe["mid_candidates"],
+                cached_universe["small_candidates"],
+                cached_universe["event_candidates"],
+            )
+            broad_entries_json = entries_to_json(broad_entries)
+            context_entries = [
+                item for item in entries if not item.get("investable", True)
+            ]
+            analysis_entries = broad_entries_json + context_entries
+            core_symbols = list(dict.fromkeys(
+                [
+                    str(item.get("symbol", "")).upper()
+                    for item in entries
+                    if item.get("symbol")
+                ]
+                + [position.symbol for position in state.positions]
+            ))
+            symbols = list(dict.fromkeys(
+                [
+                    str(item.get("symbol", "")).upper()
+                    for item in analysis_entries
+                    if item.get("symbol")
+                ]
+                + core_symbols
+            ))
             forecast_started = time.monotonic()
             histories = get_daily_histories(
                 client, HistoricalCache(root / ".local" / "state" / "historicals"),
@@ -261,16 +299,24 @@ def run_agent_cycle(
                     portfolio_value=state.portfolio_value, cash=state.cash, payload=payload,
                 )
                 return AgentResult(status="insufficient_benchmark_history", run_id=run_id, decision_key=decision_key, detail=",".join(missing_history))
-            investable_symbols = {
+            core_investable_symbols = {
                 str(item.get("symbol", "")).upper()
                 for item in entries
+                if item.get("investable", True)
+            }
+            core_investable_symbols.update(
+                position.symbol for position in state.positions
+            )
+            investable_symbols = {
+                str(item.get("symbol", "")).upper()
+                for item in analysis_entries
                 if item.get("investable", True)
             }
             investable_symbols.update(position.symbol for position in state.positions)
             forecast_histories = {
                 symbol: bars
                 for symbol, bars in histories.items()
-                if (symbol == "SPY" or symbol in investable_symbols)
+                if (symbol == "SPY" or symbol in core_investable_symbols)
                 and symbol not in history_integrity
             }
             models, model_snapshot = get_or_create_daily_models(
@@ -279,6 +325,27 @@ def run_agent_cycle(
             forecasts, models = forecast_assets(
                 forecast_histories, settings.forecast, models=models
             )
+            broad_forecast_histories = {
+                symbol: bars
+                for symbol, bars in histories.items()
+                if (symbol == "SPY" or symbol in investable_symbols)
+                and symbol not in history_integrity
+            }
+            broad_forecasts, _ = forecast_assets(
+                broad_forecast_histories, settings.forecast, models=models
+            )
+            broad_model_integrity_issues = model_integrity_issues(
+                broad_forecasts, models, settings.forecast
+            )
+            broad_quarantine_symbols = {
+                issue.split(":", 1)[0]
+                for issue in broad_model_integrity_issues
+                if ":" in issue
+            }
+            broad_forecasts = [
+                item for item in broad_forecasts
+                if item.symbol not in broad_quarantine_symbols
+            ]
             monitor_quotes = _quote_map(monitor_payload)
             event_shadow_forecasts = build_event_shadow_forecasts(
                 histories=forecast_histories,
@@ -307,7 +374,7 @@ def run_agent_cycle(
             integrity_issues = sorted(set(integrity_issues))
             event_symbols = {
                 str(item.get("symbol", "")).upper()
-                for item in entries
+                for item in analysis_entries
                 if item.get("bucket") == "event" and item.get("symbol")
             }
             event_symbols.update(item.symbol for item in event_shadow_forecasts)
@@ -327,11 +394,14 @@ def run_agent_cycle(
                 reverse=True,
             )
             ranked_candidates = candidate_forecasts(
-                forecasts,
+                broad_forecasts,
                 settings.forecast,
                 event_symbols=event_symbols | continuity_symbols,
+                limit=settings.research.quantitative_shortlist_size,
             )
-            forecast_by_symbol = {item.symbol: item for item in forecasts}
+            forecast_by_symbol = {
+                item.symbol: item for item in broad_forecasts
+            }
             continuity_candidates = [
                 forecast_by_symbol[symbol]
                 for symbol in continuity_order
@@ -342,7 +412,7 @@ def run_agent_cycle(
                 for item in event_shadow_forecasts
                 if item.symbol in forecast_by_symbol
             ]
-            candidates = list(
+            candidate_shortlist = list(
                 {
                     item.symbol: item
                     for item in (
@@ -351,26 +421,78 @@ def run_agent_cycle(
                         + ranked_candidates
                     )
                 }.values()
-            )[: settings.forecast.research_candidate_count]
+            )[: settings.research.quantitative_shortlist_size]
             timings["history_and_forecast_seconds"] = round(
                 time.monotonic() - forecast_started, 3
             )
-            by_symbol = {item.symbol: item for item in forecasts}
+            by_symbol = {item.symbol: item for item in broad_forecasts}
             # Existing holdings take priority so every held name receives an
-            # explicit retain/exit review before new opportunities consume the
-            # ten-name research budget.
-            research_set = [
+            # explicit retain/exit review. The top five opportunities remain in
+            # scope, while unused fresh-LLM capacity rotates through the broader
+            # shortlist instead of repeatedly paying for identical names.
+            holding_forecasts = [
                 by_symbol[position.symbol]
                 for position in state.positions
                 if position.symbol in by_symbol
             ]
-            for candidate in candidates:
-                if candidate.symbol not in {item.symbol for item in research_set}:
-                    research_set.append(candidate)
-            research_set = research_set[: settings.risk.max_positions]
+            top_candidates = candidate_shortlist[
+                : settings.forecast.research_candidate_count
+            ]
+            event_shadow_by_symbol = {
+                item.symbol: item.to_dict() for item in event_shadow_forecasts
+            }
+            signature_candidates = list({
+                item.symbol: item
+                for item in holding_forecasts + candidate_shortlist
+            }.values())
+            research_signatures = {
+                item.symbol: research_context_signature(
+                    symbol=item.symbol,
+                    trading_date=trading_date,
+                    model=settings.openai_model,
+                    prompt_version=settings.prompt_version,
+                    forecast=item,
+                    persistent_state=universe_security_state.get(item.symbol, []),
+                    triggers=monitor.triggers,
+                    event_shadow_forecast=event_shadow_by_symbol.get(item.symbol),
+                )
+                for item in signature_candidates
+            }
+            cached_assessments = ledger.cached_research_assessments(
+                research_signatures, current.isoformat()
+            )
+            research_set = []
+            fresh_symbols: list[str] = []
+
+            def add_research_candidate(item: Any) -> None:
+                if item.symbol in {candidate.symbol for candidate in research_set}:
+                    return
+                is_fresh = item.symbol not in cached_assessments
+                if (
+                    is_fresh
+                    and len(fresh_symbols)
+                    >= settings.research.max_fresh_llm_symbols_per_run
+                ):
+                    return
+                if len(research_set) >= settings.risk.max_positions:
+                    return
+                research_set.append(item)
+                if is_fresh:
+                    fresh_symbols.append(item.symbol)
+
+            for item in holding_forecasts:
+                add_research_candidate(item)
+            for item in top_candidates:
+                add_research_candidate(item)
+            for item in candidate_shortlist:
+                if len(fresh_symbols) >= settings.research.max_fresh_llm_symbols_per_run:
+                    break
+                if item.symbol in cached_assessments:
+                    continue
+                add_research_candidate(item)
             candidate_funnel = build_candidate_funnel(
-                entries,
-                forecasts,
+                analysis_entries,
+                broad_forecasts,
                 settings.forecast,
                 event_symbols=event_symbols,
                 persistent_symbols=continuity_symbols,
@@ -422,14 +544,18 @@ def run_agent_cycle(
                 )
             research_started = time.monotonic()
             research_symbols_ordered = [item.symbol for item in research_set]
+            fresh_research_set = [
+                item for item in research_set if item.symbol in fresh_symbols
+            ]
+            fresh_research_symbols = [item.symbol for item in fresh_research_set]
             persistent_security_state = {
                 symbol: universe_security_state[symbol]
                 for symbol in research_symbols_ordered
                 if symbol in universe_security_state
             }
             deep_symbols = plan_deep_research(
-                research_symbols_ordered,
-                entries=entries,
+                fresh_research_symbols,
+                entries=analysis_entries,
                 triggers=monitor.triggers,
                 holding_symbols={position.symbol for position in state.positions},
                 persistent_state=persistent_security_state,
@@ -437,13 +563,13 @@ def run_agent_cycle(
             )
             sec_symbols = plan_sec_research(
                 deep_symbols,
-                entries=entries,
+                entries=analysis_entries,
                 triggers=monitor.triggers,
                 persistent_state=persistent_security_state,
                 limit=settings.research.max_sec_symbols_per_run,
             )
             expected_research_calls = (
-                3
+                (3 if fresh_research_symbols else 0)
                 + 2 * len(deep_symbols)
                 + (1 + 2 * len(sec_symbols) if sec_symbols else 0)
             )
@@ -451,23 +577,27 @@ def run_agent_cycle(
                 raise RuntimeError(
                     "Configured research plan exceeds the per-run tool-call budget"
                 )
-            research_payload, source_tools = collect_research(
-                client,
-                research_symbols_ordered,
-                settings.research.deep_candidate_count,
-                account_number=state.account_number,
-                deep_symbols=deep_symbols,
-            )
-            sec_payload, sec_tools = collect_sec_filings(
-                root,
-                sec_symbols,
-                user_agent=(
-                    f"AIInvestorTest/0.7 ({email_config.sender})"
-                    if email_config is not None
-                    else "AIInvestorTest/0.7"
-                ),
-                max_symbols=settings.research.max_sec_symbols_per_run,
-            )
+            if fresh_research_symbols:
+                research_payload, source_tools = collect_research(
+                    client,
+                    fresh_research_symbols,
+                    settings.research.deep_candidate_count,
+                    account_number=state.account_number,
+                    deep_symbols=deep_symbols,
+                )
+                sec_payload, sec_tools = collect_sec_filings(
+                    root,
+                    sec_symbols,
+                    user_agent=(
+                        f"AIInvestorTest/0.8 ({email_config.sender})"
+                        if email_config is not None
+                        else "AIInvestorTest/0.8"
+                    ),
+                    max_symbols=settings.research.max_sec_symbols_per_run,
+                )
+            else:
+                research_payload, source_tools = {}, ()
+                sec_payload, sec_tools = {}, ()
             source_tools = tuple(source_tools) + tuple(sec_tools)
             if len(source_tools) > settings.max_tool_calls_per_run:
                 raise RuntimeError("Actual research tool-call budget exceeded")
@@ -475,6 +605,11 @@ def run_agent_cycle(
                 "research_plan": {
                     "deep_symbols": deep_symbols,
                     "sec_symbols": sec_symbols,
+                    "fresh_llm_symbols": fresh_research_symbols,
+                    "cached_symbols": [
+                        symbol for symbol in research_symbols_ordered
+                        if symbol in cached_assessments
+                    ],
                 },
                 "sec_filings": sec_payload,
                 **research_payload,
@@ -482,24 +617,39 @@ def run_agent_cycle(
             research_symbols = {item.symbol for item in research_set}
             research_payload["universe_eligibility"] = [
                 item
-                for item in entries
-                if str(item.get("symbol", "")).upper() in research_symbols
+                for item in analysis_entries
+                if str(item.get("symbol", "")).upper() in set(fresh_research_symbols)
             ]
             timings["research_tools_seconds"] = round(
                 time.monotonic() - research_started, 3
             )
             try:
-                research = analyze_candidates(
-                    settings=settings, ledger=ledger, run_id=run_id,
-                    forecasts=research_set, regime=regime,
-                    market_context=monitor_payload.get("market_summary") or {},
-                    research=research_payload, source_tools=source_tools,
-                    persistent_security_state=persistent_security_state,
-                    event_shadow_forecasts=[
-                        item.to_dict() for item in event_shadow_forecasts
-                        if item.symbol in research_symbols
-                    ],
-                )
+                if fresh_research_set:
+                    fresh_research = analyze_candidates(
+                        settings=settings, ledger=ledger, run_id=run_id,
+                        forecasts=fresh_research_set, regime=regime,
+                        market_context=monitor_payload.get("market_summary") or {},
+                        research=research_payload, source_tools=source_tools,
+                        persistent_security_state={
+                            symbol: persistent_security_state[symbol]
+                            for symbol in fresh_research_symbols
+                            if symbol in persistent_security_state
+                        },
+                        event_shadow_forecasts=[
+                            item.to_dict() for item in event_shadow_forecasts
+                            if item.symbol in set(fresh_research_symbols)
+                        ],
+                    )
+                else:
+                    fresh_research = ResearchResult(
+                        model=settings.openai_model,
+                        assessment={"market_summary": "", "candidates": []},
+                        source_tools=(),
+                        input_tokens=0,
+                        output_tokens=0,
+                        estimated_cost_usd=0.0,
+                        latency_seconds=0.0,
+                    )
             except Exception as exc:
                 error = f"{type(exc).__name__}: {exc}"
                 delivery = send_or_queue(
@@ -531,10 +681,42 @@ def run_agent_cycle(
                     status="llm_failed_no_trade", run_id=run_id,
                     decision_key=decision_key, detail=error,
                 )
+            fresh_by_symbol = {
+                str(item.get("symbol") or "").upper(): item
+                for item in fresh_research.assessment.get("candidates", [])
+            }
+            expires_at = (
+                current + timedelta(minutes=settings.research.assessment_ttl_minutes)
+            ).isoformat()
+            combined_candidates = []
+            for symbol in research_symbols_ordered:
+                assessment = fresh_by_symbol.get(symbol)
+                if assessment is None and symbol in cached_assessments:
+                    assessment = cached_assessments[symbol]["assessment"]
+                if assessment is None:
+                    raise RuntimeError(
+                        f"Missing fresh or cached research assessment for {symbol}"
+                    )
+                combined_candidates.append(assessment)
+            research = ResearchResult(
+                model=settings.openai_model,
+                assessment={
+                    "market_summary": (
+                        fresh_research.assessment.get("market_summary")
+                        or "No material research-context change; cached assessments reused."
+                    ),
+                    "candidates": combined_candidates,
+                },
+                source_tools=fresh_research.source_tools,
+                input_tokens=fresh_research.input_tokens,
+                output_tokens=fresh_research.output_tokens,
+                estimated_cost_usd=fresh_research.estimated_cost_usd,
+                latency_seconds=fresh_research.latency_seconds,
+            )
             timings["llm_seconds"] = round(research.latency_seconds, 3)
             persisted_security_facts = persist_security_facts(
                 ledger,
-                research.assessment,
+                fresh_research.assessment,
                 current,
                 research_evidence=research_payload,
                 persistent_state=persistent_security_state,
@@ -542,19 +724,49 @@ def run_agent_cycle(
             updated_security_state = ledger.active_security_events(
                 set(research_symbols_ordered), trading_date
             )
+            fresh_store_signatures = {
+                symbol: research_context_signature(
+                    symbol=symbol,
+                    trading_date=trading_date,
+                    model=settings.openai_model,
+                    prompt_version=settings.prompt_version,
+                    forecast=by_symbol[symbol],
+                    persistent_state=updated_security_state.get(symbol, []),
+                    triggers=monitor.triggers,
+                    event_shadow_forecast=event_shadow_by_symbol.get(symbol),
+                )
+                for symbol in fresh_research_symbols
+                if symbol in by_symbol
+            }
+            ledger.store_research_assessments(
+                list(fresh_by_symbol.values()),
+                fresh_store_signatures,
+                researched_at=current.isoformat(),
+                expires_at=expires_at,
+                model=settings.openai_model,
+                prompt_version=settings.prompt_version,
+            )
             allowed = allowed_symbols(research)
             llm_reviewed = [
                 item for item in research_set if item.symbol in allowed
             ]
-            entry_eligible = investment_candidate_forecasts(
-                llm_reviewed, settings.forecast
+            quantitatively_entry_eligible = investment_candidate_forecasts(
+                llm_reviewed,
+                settings.forecast,
+                allowed_symbols=core_investable_symbols,
             )
+            entry_eligible = quantitatively_entry_eligible
             investment_failures_by_symbol = {
                 item.symbol: list(
                     investment_eligibility_failures(item, settings.forecast)
                 )
                 for item in llm_reviewed
             }
+            for item in llm_reviewed:
+                if item.symbol not in core_investable_symbols:
+                    investment_failures_by_symbol[item.symbol].append(
+                        "broad_research_shadow_only"
+                    )
             if integrity_issues:
                 for item in llm_reviewed:
                     investment_failures_by_symbol.setdefault(item.symbol, []).append(
@@ -636,7 +848,7 @@ def run_agent_cycle(
             eligible = list(eligible_by_symbol.values())
             sectors = {
                 str(item.get("symbol", "")).upper(): str(item.get("sector", ""))
-                for item in entries
+                for item in analysis_entries
                 if item.get("symbol")
             }
             current_weights = {
@@ -734,6 +946,18 @@ def run_agent_cycle(
                 event_shadow_forecasts=[
                     item.to_dict() for item in event_shadow_forecasts
                 ],
+                research_cache_summary={
+                    "quantitative_universe_size": len(broad_entries),
+                    "quantitative_forecasts": len(broad_forecasts),
+                    "shortlist_size": len(candidate_shortlist),
+                    "fresh_llm_symbols": fresh_research_symbols,
+                    "cached_symbols": [
+                        symbol for symbol in research_symbols_ordered
+                        if symbol in cached_assessments
+                    ],
+                    "ttl_minutes": settings.research.assessment_ttl_minutes,
+                    "forecast_quarantine": sorted(broad_quarantine_symbols),
+                },
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
@@ -785,6 +1009,20 @@ def run_agent_cycle(
                     "new_signals": event_shadow_insertions,
                     "updated_realizations": event_shadow_resolutions,
                 },
+                "broad_research_universe": {
+                    "size": len(broad_entries),
+                    "forecast_count": len(broad_forecasts),
+                    "shortlist_count": len(candidate_shortlist),
+                    "fresh_llm_symbols": fresh_research_symbols,
+                    "cached_symbols": [
+                        symbol for symbol in research_symbols_ordered
+                        if symbol in cached_assessments
+                    ],
+                    "assessment_ttl_minutes": (
+                        settings.research.assessment_ttl_minutes
+                    ),
+                    "forecast_quarantine": sorted(broad_quarantine_symbols),
+                },
                 "portfolio_eligible_stocks": [item.symbol for item in eligible],
                 "entry_eligible_stocks": [item.symbol for item in entry_eligible],
                 "investment_eligibility_failures": investment_failures_by_symbol,
@@ -811,6 +1049,10 @@ def run_agent_cycle(
                 "candidate_funnel": candidate_funnel,
                 "model_snapshot": model_snapshot,
                 "history_integrity_quarantine": history_integrity,
+                "broad_model_integrity_quarantine": {
+                    "symbols": sorted(broad_quarantine_symbols),
+                    "issues": broad_model_integrity_issues,
+                },
                 "model_integrity": {
                     "status": "BLOCKED" if integrity_issues else "PASSED",
                     "issues": integrity_issues,

@@ -1,15 +1,17 @@
 import unittest
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ai_investor.ledger import Ledger
+from ai_investor.forecasting import AssetForecast
 from ai_investor.research import (
     collect_research,
     estimate_model_cost,
     persist_security_facts,
     plan_deep_research,
     plan_sec_research,
+    research_context_signature,
 )
 
 
@@ -23,6 +25,76 @@ class FakeResearchClient:
 
 
 class ResearchTests(unittest.TestCase):
+    def test_context_signature_ignores_intraday_noise_but_tracks_event_regime(self) -> None:
+        forecast = AssetForecast(
+            symbol="AAA",
+            data_as_of="2026-09-14",
+            expected_excess_return_5d=.01,
+            expected_excess_return_20d=.02,
+            probability_positive_excess_5d=.51,
+            probability_positive_excess_20d=.52,
+            uncertainty_5d=.10,
+            uncertainty_20d=.20,
+            signals={},
+        )
+        base = dict(
+            symbol="AAA",
+            trading_date="2026-09-15",
+            model="gpt-5.6-terra",
+            prompt_version="test",
+            forecast=forecast,
+            persistent_state=[],
+        )
+        first = research_context_signature(
+            **base,
+            triggers=[{"symbol": "AAA", "type": "price_move", "change_from_previous_close": .021}],
+        )
+        same_band = research_context_signature(
+            **base,
+            triggers=[{"symbol": "AAA", "type": "price_move", "change_from_previous_close": .049}],
+        )
+        stronger = research_context_signature(
+            **base,
+            triggers=[{"symbol": "AAA", "type": "price_move", "change_from_previous_close": .051}],
+        )
+        self.assertEqual(first, same_band)
+        self.assertNotEqual(first, stronger)
+
+    def test_research_cache_requires_matching_context_and_unexpired_ttl(self) -> None:
+        assessment = {"symbol": "AAA", "verdict": "allow"}
+        observed = datetime(2026, 9, 15, 14, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            with Ledger(Path(directory) / "ledger.sqlite") as ledger:
+                ledger.store_research_assessments(
+                    [assessment],
+                    {"AAA": "signature-a"},
+                    researched_at=observed.isoformat(),
+                    expires_at=(observed + timedelta(hours=6)).isoformat(),
+                    model="gpt-5.6-terra",
+                    prompt_version="test",
+                )
+                self.assertIn(
+                    "AAA",
+                    ledger.cached_research_assessments(
+                        {"AAA": "signature-a"},
+                        (observed + timedelta(hours=1)).isoformat(),
+                    ),
+                )
+                self.assertNotIn(
+                    "AAA",
+                    ledger.cached_research_assessments(
+                        {"AAA": "signature-b"},
+                        (observed + timedelta(hours=1)).isoformat(),
+                    ),
+                )
+                self.assertNotIn(
+                    "AAA",
+                    ledger.cached_research_assessments(
+                        {"AAA": "signature-a"},
+                        (observed + timedelta(hours=7)).isoformat(),
+                    ),
+                )
+
     def test_ten_names_and_five_deep_names_use_twelve_calls(self) -> None:
         client = FakeResearchClient()
         symbols = [f"S{index}" for index in range(10)]

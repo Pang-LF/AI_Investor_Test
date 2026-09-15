@@ -39,6 +39,14 @@ Every 15 minutes during regular US market hours:
    A separate shadow-only Event Engine prioritizes abnormal movers and supplies
    empirical 1-/5-day analog distributions to the same research call. Its output
    cannot create a target weight or authorize an order.
+   Separately, formal decisions build a 200-stock daily-bar research tier from
+   the cached scanner candidates. The 60-name intraday monitor and its Robinhood
+   quote load remain unchanged. The frozen 60-name model is applied to the broad
+   tier for shadow discovery; the broad tier does not retrain the existing core
+   model used for live holding management.
+   LLM assessments are cached for 390 minutes and reused when the prompt/model,
+   trading date, durable event state, and material price-event band are unchanged.
+   Unused LLM capacity rotates through new names from a 25-stock shortlist.
 5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
    per-sector strategy soft caps and creates target weights including cash.
    No-trade and 100% cash are valid outputs. Existing holdings use lower hold
@@ -56,7 +64,7 @@ did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.7.0.yaml`](strategies/agentic/strategy_v0.7.0.yaml).
+[`strategies/agentic/strategy_v0.8.0.yaml`](strategies/agentic/strategy_v0.8.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -84,6 +92,7 @@ The full implemented data and decision flow is documented in
 .venv/bin/ai-investor agent-cycle
 .venv/bin/ai-investor live-status
 .venv/bin/ai-investor event-shadow-status
+.venv/bin/ai-investor research-cache-status
 .venv/bin/python scripts/opportunity_capture_audit.py
 .venv/bin/python -m unittest discover -s tests -v
 ```

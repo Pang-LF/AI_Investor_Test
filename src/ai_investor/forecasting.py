@@ -671,6 +671,7 @@ def candidate_forecasts(
     forecasts: Iterable[AssetForecast],
     settings: ForecastSettings,
     event_symbols: Iterable[str] = (),
+    limit: Optional[int] = None,
 ) -> List[AssetForecast]:
     event_set = {symbol.upper() for symbol in event_symbols}
     eligible = [
@@ -692,11 +693,13 @@ def candidate_forecasts(
             forecast.raw_expected_excess_return_20d,
         ),
         reverse=True,
-    )[: settings.research_candidate_count]
+    )[: (settings.research_candidate_count if limit is None else limit)]
 
 
 def investment_candidate_forecasts(
-    forecasts: Iterable[AssetForecast], settings: ForecastSettings
+    forecasts: Iterable[AssetForecast],
+    settings: ForecastSettings,
+    allowed_symbols: Optional[Iterable[str]] = None,
 ) -> List[AssetForecast]:
     """Apply calibrated investment eligibility requirements.
 
@@ -705,9 +708,14 @@ def investment_candidate_forecasts(
     """
     if not settings.execution_calibration_approved:
         return []
+    allowed = (
+        {str(symbol).upper() for symbol in allowed_symbols}
+        if allowed_symbols is not None else None
+    )
     return [
         forecast for forecast in forecasts
         if not investment_eligibility_failures(forecast, settings)
+        and (allowed is None or forecast.symbol.upper() in allowed)
     ]
 
 

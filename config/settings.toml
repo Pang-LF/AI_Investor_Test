@@ -1,7 +1,7 @@
 mode = "LIVE"
 live_trading = true
-strategy_version = "strategy_v0.7.0"
-prompt_version = "research_v0.3.1"
+strategy_version = "strategy_v0.8.0"
+prompt_version = "research_v0.4.0"
 openai_model = "gpt-5.6-terra"
 max_input_tokens = 40000
 max_output_tokens = 4000
@@ -92,6 +92,10 @@ max_abs_model_prediction_20d = 0.50
 [research]
 deep_candidate_count = 5
 max_sec_symbols_per_run = 2
+quantitative_universe_size = 200
+quantitative_shortlist_size = 25
+assessment_ttl_minutes = 390
+max_fresh_llm_symbols_per_run = 5
 
 [event_engine]
 enabled = true

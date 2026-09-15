@@ -4,6 +4,7 @@ import argparse
 import getpass
 import json
 from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Settings
@@ -89,6 +90,7 @@ def main() -> None:
     )
     subparsers.add_parser("live-status")
     subparsers.add_parser("event-shadow-status")
+    subparsers.add_parser("research-cache-status")
     subparsers.add_parser("disarm-live")
     args = parser.parse_args()
 
@@ -322,6 +324,21 @@ def main() -> None:
                 {field: row[field] for field in latest_fields}
                 for row in rows[-10:]
             ],
+        }, indent=2))
+    elif args.command == "research-cache-status":
+        with Ledger(ROOT / ".local" / "state" / "ledger.sqlite") as ledger:
+            payload = ledger.research_assessment_cache_status(
+                datetime.now(timezone.utc).isoformat()
+            )
+        print(json.dumps({
+            "quantitative_universe_size": (
+                settings.research.quantitative_universe_size
+            ),
+            "quantitative_shortlist_size": (
+                settings.research.quantitative_shortlist_size
+            ),
+            "assessment_ttl_minutes": settings.research.assessment_ttl_minutes,
+            **payload,
         }, indent=2))
     elif args.command == "disarm-live":
         path = ROOT / ".local" / "state" / "live_arm.json"

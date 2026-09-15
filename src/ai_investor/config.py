@@ -301,17 +301,35 @@ class ForecastSettings:
 class ResearchSettings:
     deep_candidate_count: int
     max_sec_symbols_per_run: int
+    quantitative_universe_size: int
+    quantitative_shortlist_size: int
+    assessment_ttl_minutes: int
+    max_fresh_llm_symbols_per_run: int
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ResearchSettings":
         settings = cls(
             deep_candidate_count=int(raw["deep_candidate_count"]),
             max_sec_symbols_per_run=int(raw["max_sec_symbols_per_run"]),
+            quantitative_universe_size=int(raw["quantitative_universe_size"]),
+            quantitative_shortlist_size=int(raw["quantitative_shortlist_size"]),
+            assessment_ttl_minutes=int(raw["assessment_ttl_minutes"]),
+            max_fresh_llm_symbols_per_run=int(
+                raw["max_fresh_llm_symbols_per_run"]
+            ),
         )
         if not 1 <= settings.deep_candidate_count <= 5:
             raise RuntimeError("Deep news/earnings research must cover 1-5 names")
         if not 0 <= settings.max_sec_symbols_per_run <= 2:
             raise RuntimeError("SEC research must cover no more than two names")
+        if settings.quantitative_universe_size != 200:
+            raise RuntimeError("The broad quantitative research universe must be 200")
+        if not 10 <= settings.quantitative_shortlist_size <= 40:
+            raise RuntimeError("Quantitative shortlist must contain 10-40 names")
+        if not 60 <= settings.assessment_ttl_minutes <= 1440:
+            raise RuntimeError("Research assessment TTL must be 60-1440 minutes")
+        if not 1 <= settings.max_fresh_llm_symbols_per_run <= 5:
+            raise RuntimeError("At most five symbols may receive fresh LLM research")
         return settings
 
 

@@ -605,6 +605,106 @@ def assemble_universe(
     return entries
 
 
+def assemble_research_universe(
+    size: int,
+    position_symbols: Sequence[str],
+    large_candidates: Sequence[UniverseEntry],
+    mid_candidates: Sequence[UniverseEntry],
+    small_candidates: Sequence[UniverseEntry],
+    event_candidates: Sequence[UniverseEntry],
+) -> List[UniverseEntry]:
+    """Build a broad daily-bar research tier without changing live monitoring.
+
+    The 15-minute monitor remains bounded to 60 names. This tier uses already
+    cached scanner results, prioritizes holdings and event/small-cap diversity,
+    and is consumed only by broad shadow discovery plus bounded qualitative
+    research.
+    """
+    if size < len(position_symbols):
+        raise MCPError("Positions exceed the broad research-universe capacity")
+    candidate_context = {
+        entry.symbol: entry
+        for candidates in (
+            large_candidates,
+            mid_candidates,
+            small_candidates,
+            event_candidates,
+        )
+        for entry in candidates
+    }
+    entries: List[UniverseEntry] = []
+    excluded: set[str] = set()
+    issuer_excluded: set[str] = set()
+    sector_counts: Dict[str, int] = {}
+
+    for raw_symbol in position_symbols:
+        symbol = str(raw_symbol).upper()
+        if not symbol or symbol in excluded:
+            continue
+        context = candidate_context.get(symbol)
+        entry = UniverseEntry(
+            symbol=symbol,
+            bucket="position",
+            sector=context.sector if context else "",
+            issuer=context.issuer if context else "",
+        )
+        entries.append(entry)
+        excluded.add(symbol)
+        issuer_excluded.add(_issuer_key(symbol, entry.issuer))
+        if entry.sector:
+            sector_counts[entry.sector] = sector_counts.get(entry.sector, 0) + 1
+
+    # Event and smaller-company candidates add opportunity diversity. Large
+    # and mid caps then fill most of the 200-name daily research layer.
+    initial_pools = (
+        (event_candidates, 30, 8),
+        (small_candidates, 30, 8),
+        (mid_candidates, 70, 15),
+        (large_candidates, 70, 15),
+    )
+    for pool, target, sector_cap in initial_pools:
+        remaining = max(0, size - len(entries))
+        if not remaining:
+            break
+        entries.extend(
+            _take_with_sector_cap(
+                pool,
+                min(target, remaining),
+                excluded,
+                sector_cap=sector_cap,
+                issuer_excluded=issuer_excluded,
+                global_sector_counts=sector_counts,
+                global_sector_cap=25,
+            )
+        )
+
+    fill_pools = (event_candidates, small_candidates, mid_candidates, large_candidates)
+    while len(entries) < size:
+        added = False
+        for pool in fill_pools:
+            selected = _take_with_sector_cap(
+                pool,
+                1,
+                excluded,
+                sector_cap=25,
+                issuer_excluded=issuer_excluded,
+                global_sector_counts=sector_counts,
+                global_sector_cap=25,
+            )
+            if selected:
+                entries.extend(selected)
+                added = True
+            if len(entries) >= size:
+                break
+        if not added:
+            break
+    if len(entries) != size:
+        raise MCPError(
+            f"Broad research universe produced {len(entries)} symbols, expected {size}"
+        )
+    return entries
+
+
 def build_universe(
     client: RobinhoodReadOnlyMCPClient,
     settings: MonitorSettings,

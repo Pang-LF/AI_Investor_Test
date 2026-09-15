@@ -190,6 +190,30 @@ class ForecastingTests(unittest.TestCase):
         )
         self.assertEqual(investment_candidate_forecasts([forecast], settings), [])
 
+    def test_broad_shadow_name_cannot_enter_shared_optimizer(self) -> None:
+        settings = Settings.load(Path("config/settings.toml")).forecast
+        forecast = AssetForecast(
+            symbol="BROAD", data_as_of="2026-09-10",
+            expected_excess_return_5d=.02,
+            expected_excess_return_20d=.04,
+            probability_positive_excess_5d=.60,
+            probability_positive_excess_20d=.65,
+            uncertainty_5d=.05, uncertainty_20d=.10, signals={},
+            calibration_date_blocks_20d=10,
+        )
+        self.assertEqual(
+            investment_candidate_forecasts(
+                [forecast], settings, allowed_symbols={"CORE"}
+            ),
+            [],
+        )
+        self.assertEqual(
+            investment_candidate_forecasts(
+                [forecast], settings, allowed_symbols={"BROAD"}
+            ),
+            [forecast],
+        )
+
     def test_execution_gate_reports_the_exact_failed_threshold(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).forecast
         forecast = AssetForecast(

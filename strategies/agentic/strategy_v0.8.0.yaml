@@ -1,0 +1,83 @@
+strategy_id: agentic_single_account
+version: strategy_v0.8.0
+effective_date: 2026-09-15
+owner: system_and_user
+supersedes: strategy_v0.7.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  intraday_interval_minutes: 15
+  intraday_symbols: 60
+  context_only_etfs: 12
+  immutable_point_in_time_universe_snapshots: true
+
+broad_research:
+  quantitative_universe_size: 200
+  source: cached_robinhood_scanner_candidates
+  data_frequency: completed_daily_bars
+  retrains_live_model: false
+  model_application: frozen_core_model_from_60_name_monitor
+  quantitative_shortlist_size: 25
+  portfolio_optimizer_access: false
+  order_generation_access: false
+  maximum_fresh_llm_symbols_per_run: 5
+  assessment_ttl_minutes: 390
+  cache_scope: per_symbol
+  cache_invalidators:
+    - new_trading_date
+    - model_or_prompt_change
+    - durable_event_state_change
+    - price_event_direction_change
+    - price_event_band_change_2_5_10_percent
+    - ttl_expiry
+  intraband_price_noise_invalidates_cache: false
+
+twenty_day_engine:
+  model: pooled_beta_ridge_v0.5.0
+  status: shadow_only_for_all_buys
+  new_entry_live_enabled: false
+  existing_position_management_enabled: true
+  shadow_decisions_enabled: true
+  broad_new_entries_live_enabled: false
+  provisional_shadow_gates:
+    adjusted_alpha_20d_minimum: 0.005
+    calibrated_probability_minimum: 0.55
+    edge_ratio_minimum: 0.15
+
+event_engine:
+  version: empirical_event_analog_v0.1
+  enabled: true
+  live_entry_enabled: false
+  forecast_horizons_days: [1, 5]
+  portfolio_optimizer_access: false
+  order_generation_access: false
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.4.0
+  maximum_llm_calls_per_decision: 1
+  repeated_unchanged_assessment: reuse_cache
+  fresh_research_is_incremental: true
+  event_forecast_may_create_alpha: false
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-15
+    changed_by: user_and_system
+    reason: Expand opportunity coverage without repeatedly paying to research unchanged stocks.
+    changes:
+      - add_200_stock_daily_research_universe
+      - keep_60_stock_15_minute_quote_monitor
+      - apply_frozen_core_model_to_broad_shadow_discovery
+      - add_per_symbol_llm_assessment_cache
+      - rotate_fresh_research_capacity_through_25_name_shortlist
+      - log_fresh_and_cached_research_symbols
+      - retain_all_existing_live_and_hard_risk_permissions
