@@ -1,10 +1,10 @@
 mode = "LIVE"
 live_trading = true
 strategy_version = "strategy_v0.6.1"
-prompt_version = "research_v0.3.0"
+prompt_version = "research_v0.3.1"
 openai_model = "gpt-5.6-terra"
 max_input_tokens = 40000
-max_output_tokens = 2400
+max_output_tokens = 4000
 max_llm_calls_per_run = 1
 max_tool_calls_per_run = 18
 max_mcp_calls_per_decision_run = 50
