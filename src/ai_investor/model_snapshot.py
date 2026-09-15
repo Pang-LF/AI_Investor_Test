@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Dict, Mapping, Sequence, Tuple
 
 from .config import ForecastSettings
-from .forecasting import RidgeModel, forecast_assets
+from .forecasting import FORECAST_MODEL_VERSION, RidgeModel, forecast_assets
 from .market_data import DailyBar
 
 
@@ -27,7 +27,8 @@ _TUPLE_FIELDS = {
 
 def _settings_fingerprint(settings: ForecastSettings) -> str:
     encoded = json.dumps(
-        asdict(settings), sort_keys=True, separators=(",", ":")
+        {"model_version": FORECAST_MODEL_VERSION, "settings": asdict(settings)},
+        sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 

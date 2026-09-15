@@ -181,6 +181,11 @@ class ForecastSettings:
     holding_min_edge_ratio_20d: float
     holding_exit_confirmation_runs: int
     max_abs_forecast_20d: float
+    max_daily_close_ratio: float
+    max_uncertainty_5d: float
+    max_uncertainty_20d: float
+    max_abs_model_prediction_5d: float
+    max_abs_model_prediction_20d: float
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "ForecastSettings":
@@ -226,6 +231,15 @@ class ForecastSettings:
             holding_min_edge_ratio_20d=float(raw["holding_min_edge_ratio_20d"]),
             holding_exit_confirmation_runs=int(raw["holding_exit_confirmation_runs"]),
             max_abs_forecast_20d=float(raw["max_abs_forecast_20d"]),
+            max_daily_close_ratio=float(raw["max_daily_close_ratio"]),
+            max_uncertainty_5d=float(raw["max_uncertainty_5d"]),
+            max_uncertainty_20d=float(raw["max_uncertainty_20d"]),
+            max_abs_model_prediction_5d=float(
+                raw["max_abs_model_prediction_5d"]
+            ),
+            max_abs_model_prediction_20d=float(
+                raw["max_abs_model_prediction_20d"]
+            ),
         )
         if settings.history_calendar_days < 120:
             raise RuntimeError("Forecast history must cover at least 120 calendar days")
@@ -255,6 +269,12 @@ class ForecastSettings:
             raise RuntimeError("Holding edge threshold must be below the entry threshold")
         if settings.holding_exit_confirmation_runs < 2:
             raise RuntimeError("A quantitative exit requires at least two confirmations")
+        if settings.max_daily_close_ratio <= 1.0:
+            raise RuntimeError("Daily close-ratio integrity bound must exceed one")
+        if not 0 < settings.max_uncertainty_5d < settings.max_uncertainty_20d < 1:
+            raise RuntimeError("Forecast uncertainty bounds must be ordered decimals below one")
+        if not 0 < settings.max_abs_model_prediction_5d < settings.max_abs_model_prediction_20d <= 1:
+            raise RuntimeError("Raw model prediction bounds must be ordered decimals")
         return settings
 
 

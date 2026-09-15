@@ -7,6 +7,7 @@ from ai_investor.forecasting import (
     AssetForecast,
     _beta_adjusted_return,
     _date_block_positive_probability,
+    _date_clustered_probability_interval,
     _empirical_positive_probability,
     _rolling_beta,
     _supported_bias_correction,
@@ -15,7 +16,11 @@ from ai_investor.forecasting import (
     investment_candidate_forecasts,
     investment_eligibility_failures,
     fit_ridge_model,
+    history_integrity_issues,
+    model_integrity_issues,
 )
+from ai_investor.forecasting import RidgeModel
+from ai_investor.market_data import DailyBar
 
 
 class ForecastingTests(unittest.TestCase):
@@ -45,6 +50,54 @@ class ForecastingTests(unittest.TestCase):
             0.0, errors, dates, prior_date_blocks=20
         )
         self.assertEqual(probability, 0.5)
+
+    def test_probability_interval_uses_same_prior_shrinkage_as_point(self) -> None:
+        errors = [1.0, 1.0, -1.0, 1.0]
+        dates = ["a", "b", "c", "d"]
+        point = _date_block_positive_probability(
+            0.0, errors, dates, prior_date_blocks=20
+        )
+        lower, upper = _date_clustered_probability_interval(
+            0.0, errors, dates, prior_date_blocks=20
+        )
+        self.assertLessEqual(lower, point)
+        self.assertLessEqual(point, upper)
+
+    def test_history_integrity_quarantines_split_like_discontinuity(self) -> None:
+        bars = [
+            DailyBar("BAD", "2026-01-01", 1, 1, 1, 1, 100),
+            DailyBar("BAD", "2026-01-02", 50, 50, 50, 50, 100),
+        ]
+        issues = history_integrity_issues({"BAD": bars}, 3.0)
+        self.assertIn("BAD", issues)
+        self.assertIn("close_ratio=50", issues["BAD"][0])
+
+    def test_model_integrity_blocks_implausible_uncertainty_and_probability_ci(self) -> None:
+        settings = Settings.load(Path("config/settings.toml")).forecast
+        model = RidgeModel(
+            horizon=20, intercept=0.0, coefficients=(0.0,) * 5,
+            feature_means=(0.0,) * 5, feature_scales=(1.0,) * 5,
+            residual_std=12.7, validation_errors=(0.0, 0.0),
+            training_samples=1000, validation_samples=2,
+            validation_date_blocks=2, validation_bias=0.0,
+            validation_bias_interval=(-0.1, 0.1), applied_validation_bias=0.0,
+            validation_dates=("a", "b"), validation_predictions=(0.0, 0.0),
+            validation_targets=(0.0, 0.0),
+        )
+        forecast = AssetForecast(
+            symbol="BAD", data_as_of="2026-01-01",
+            expected_excess_return_5d=0.01, expected_excess_return_20d=0.02,
+            probability_positive_excess_5d=0.55,
+            probability_positive_excess_20d=0.70,
+            uncertainty_5d=12.7, uncertainty_20d=12.7, signals={},
+            probability_positive_excess_20d_interval=(0.80, 0.90),
+        )
+        five_day = replace(model, horizon=5)
+        issues = model_integrity_issues(
+            [forecast], {"5d": five_day, "20d": model}, settings
+        )
+        self.assertTrue(any("uncertainty_20d_out_of_bounds" in item for item in issues))
+        self.assertTrue(any("probability_ci_20d" in item for item in issues))
 
     def test_bias_correction_requires_supported_date_blocks(self) -> None:
         self.assertEqual(

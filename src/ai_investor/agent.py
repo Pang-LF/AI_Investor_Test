@@ -26,8 +26,10 @@ from .forecasting import (
     investment_candidate_forecasts,
     investment_eligibility_failures,
     forecast_assets,
+    history_integrity_issues,
     holding_gate_failures,
     infer_market_regime,
+    model_integrity_issues,
 )
 from .health import clear_operational_failures, report_operational_failure
 from .ledger import Ledger
@@ -239,6 +241,14 @@ def run_agent_cycle(
                 symbols, trading_date, settings.forecast.history_calendar_days,
                 settings.forecast.min_history_bars,
             )
+            history_integrity = history_integrity_issues(
+                histories, settings.forecast.max_daily_close_ratio
+            )
+            if "SPY" in history_integrity:
+                raise RuntimeError(
+                    "MODEL_INTEGRITY_BLOCKED: benchmark history failed: "
+                    + ";".join(history_integrity["SPY"])
+                )
             missing_history = [symbol for symbol in symbols if len(histories.get(symbol, [])) < settings.forecast.min_history_bars]
             if "SPY" in missing_history:
                 payload = {"status": "insufficient_history", "missing": missing_history}
@@ -259,7 +269,8 @@ def run_agent_cycle(
             forecast_histories = {
                 symbol: bars
                 for symbol, bars in histories.items()
-                if symbol == "SPY" or symbol in investable_symbols
+                if (symbol == "SPY" or symbol in investable_symbols)
+                and symbol not in history_integrity
             }
             models, model_snapshot = get_or_create_daily_models(
                 root, trading_date, forecast_histories, settings.forecast
@@ -267,6 +278,15 @@ def run_agent_cycle(
             forecasts, models = forecast_assets(
                 forecast_histories, settings.forecast, models=models
             )
+            integrity_issues = model_integrity_issues(
+                forecasts, models, settings.forecast
+            )
+            for position in state.positions:
+                if position.symbol in history_integrity:
+                    integrity_issues.append(
+                        f"held_symbol_history_integrity={position.symbol}"
+                    )
+            integrity_issues = sorted(set(integrity_issues))
             event_symbols = {
                 str(item.get("symbol", "")).upper()
                 for item in entries
@@ -503,6 +523,11 @@ def run_agent_cycle(
                 )
                 for item in llm_reviewed
             }
+            if integrity_issues:
+                for item in llm_reviewed:
+                    investment_failures_by_symbol.setdefault(item.symbol, []).append(
+                        "model_integrity_blocked"
+                    )
             assessments = {
                 str(item.get("symbol", "")).upper(): item
                 for item in research.assessment.get("candidates", [])
@@ -511,6 +536,25 @@ def run_agent_cycle(
             holding_decisions: Dict[str, Dict[str, Any]] = {}
             minimum_weights: Dict[str, float] = {}
             for position in state.positions:
+                if integrity_issues:
+                    current_weight = (
+                        position.market_value / state.portfolio_value
+                        if state.portfolio_value > 0 else 0.0
+                    )
+                    forecast = by_symbol.get(position.symbol)
+                    if forecast is not None:
+                        eligible_by_symbol.setdefault(position.symbol, forecast)
+                    minimum_weights[position.symbol] = current_weight
+                    holding_decisions[position.symbol] = {
+                        "status": "model_integrity_blocked_retained",
+                        "immediate_exit": False,
+                        "consecutive_failures": 0,
+                        "required_confirmations": (
+                            settings.forecast.holding_exit_confirmation_runs
+                        ),
+                        "reasons": list(integrity_issues),
+                    }
+                    continue
                 forecast = by_symbol.get(position.symbol)
                 assessment = assessments.get(position.symbol, {})
                 verdict = str(assessment.get("verdict", "missing_assessment"))
@@ -563,15 +607,26 @@ def run_agent_cycle(
                 for item in entries
                 if item.get("symbol")
             }
-            if settings.forecast.execution_calibration_approved:
-                current_weights = {
-                    position.symbol: position.market_value / state.portfolio_value
-                    for position in state.positions
-                    if state.portfolio_value > 0 and position.market_value > 0
-                }
+            current_weights = {
+                position.symbol: position.market_value / state.portfolio_value
+                for position in state.positions
+                if state.portfolio_value > 0 and position.market_value > 0
+            }
+            if integrity_issues:
+                target = TargetPortfolio(
+                    weights=current_weights,
+                    cash_weight=max(0.0, state.cash / state.portfolio_value)
+                    if state.portfolio_value > 0 else 1.0,
+                    objective_value=0.0,
+                    diagnostics={
+                        "model_integrity_gate": "BLOCKED",
+                        "issues": integrity_issues,
+                    },
+                )
+            elif settings.forecast.execution_calibration_approved:
                 target = optimize_portfolio(
                     eligible,
-                    histories,
+                    forecast_histories,
                     settings.portfolio,
                     settings.risk,
                     sectors,
@@ -581,11 +636,6 @@ def run_agent_cycle(
             else:
                 # Research-only calibration mode must never liquidate existing
                 # positions as a side effect of withholding unapproved buys.
-                current_weights = {
-                    position.symbol: position.market_value / state.portfolio_value
-                    for position in state.positions
-                    if state.portfolio_value > 0 and position.market_value > 0
-                }
                 target = TargetPortfolio(
                     weights=current_weights,
                     cash_weight=max(0.0, state.cash / state.portfolio_value)
@@ -595,7 +645,7 @@ def run_agent_cycle(
                 )
             monitor_quotes = _quote_map(monitor_payload)
             prices = {symbol: float(item.get("last_trade_price") or 0) for symbol, item in monitor_quotes.items()}
-            orders = plan_orders(
+            orders = [] if integrity_issues else plan_orders(
                 decision_key=decision_key, target_weights=target.weights, state=state,
                 prices=prices, minimum_trade_usd=settings.portfolio.min_trade_usd,
             )
@@ -653,6 +703,10 @@ def run_agent_cycle(
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
+                pipeline_error=(
+                    "MODEL_INTEGRITY_BLOCKED: " + "; ".join(integrity_issues)
+                    if integrity_issues else None
+                ),
             )
             delivery = send_or_queue(
                 root,
@@ -701,6 +755,11 @@ def run_agent_cycle(
                 "persisted_security_fact_count": persisted_security_facts,
                 "candidate_funnel": candidate_funnel,
                 "model_snapshot": model_snapshot,
+                "history_integrity_quarantine": history_integrity,
+                "model_integrity": {
+                    "status": "BLOCKED" if integrity_issues else "PASSED",
+                    "issues": integrity_issues,
+                },
                 "model_calibration": {
                     key: calibration_diagnostics(model)
                     for key, model in models.items()
@@ -712,9 +771,13 @@ def run_agent_cycle(
                 "timings": timings,
                 "notification": asdict(delivery),
             }
+            run_status = (
+                "model_integrity_blocked" if integrity_issues else "completed"
+            )
+            payload["status"] = run_status
             ledger.record_run(
                 run_id=run_id, decision_key=decision_key, trading_date=trading_date,
-                mode=settings.mode, status="completed", strategy_version=settings.strategy_version,
+                mode=settings.mode, status=run_status, strategy_version=settings.strategy_version,
                 risk_policy_version=settings.risk.policy_version,
                 portfolio_value=state.portfolio_value, cash=state.cash, payload=payload,
             )
@@ -723,7 +786,7 @@ def run_agent_cycle(
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(payload, separators=(",", ":"), default=str) + "\n")
             return AgentResult(
-                status="completed", run_id=run_id, decision_key=decision_key,
+                status=run_status, run_id=run_id, decision_key=decision_key,
                 monitor_status=monitor.status,
                 candidates=tuple(item.symbol for item in research_set),
                 orders=tuple(outcomes), llm_cost_usd=research.estimated_cost_usd,

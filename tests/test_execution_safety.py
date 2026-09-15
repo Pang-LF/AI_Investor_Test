@@ -300,6 +300,7 @@ class ExecutionSafetyTests(unittest.TestCase):
                 raise AssertionError(name)
 
         settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        settings = replace(settings, mode="LIVE", live_trading=True)
         now = datetime.now(timezone.utc)
         state = BrokerState("account", 1000, 1000, 0, 0, 0, ())
         order = plan_orders(
@@ -485,6 +486,7 @@ class ExecutionSafetyTests(unittest.TestCase):
                 raise AssertionError(name)
 
         settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        settings = replace(settings, mode="LIVE", live_trading=True)
         now = datetime.now(timezone.utc)
         order = PlannedOrder(
             ref_id="failed-placement", decision_key="failed-placement",

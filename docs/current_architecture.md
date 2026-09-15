@@ -237,7 +237,7 @@ The decision log and email expose the actual sizing terms: shrunk and bias-
 adjusted forecast, forecast uncertainty, 20-day variance, current/minimum/final
 weights, expected-return contribution, covariance penalty, estimation penalty,
 reallocation cost, and old/new objective values. There is no hidden Kelly or
-regime multiplier in v0.6.1. Structural regime and deterministic intraday tone
+regime multiplier in v0.6.2. Structural regime and deterministic intraday tone
 are reported separately and are research context only.
 
 Every optimization step projects weights to nonnegative values, a 35% strategy
@@ -247,6 +247,15 @@ strategy therefore normally diversifies without changing the user-selected
 absolute boundary. Cash is the residual and can remain 100%.
 No-trade is valid. Target weights are compared with current market values;
 changes below $10 are ignored, and sells are planned before buys.
+
+Before fitting, any symbol with an adjacent split-adjusted close ratio outside
+1/3 to 3 is quarantined from both training and prediction. A benchmark failure
+stops the run. After forecasting, a model-integrity gate verifies finite values,
+explicit decimal uncertainty bounds, raw-prediction bounds, and that each
+date-clustered probability interval contains its point estimate. Failure occurs
+before portfolio optimization: current holdings are retained, no orders are
+generated, and the run is logged as `model_integrity_blocked`. Logs and email
+show uncapped and capped forecasts separately with the cap reason.
 
 ## Hard risk and execution
 

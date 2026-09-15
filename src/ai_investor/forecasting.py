@@ -17,6 +17,7 @@ FEATURE_NAMES = (
     "residual_return_1d",
     "volume_acceleration_20d",
 )
+FORECAST_MODEL_VERSION = "pooled_beta_ridge_v0.5.0"
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,11 @@ class AssetForecast:
     probability_positive_excess_20d_interval: Tuple[float, float] = (0.0, 1.0)
     calibration_date_blocks_5d: int = 0
     calibration_date_blocks_20d: int = 0
-    model_version: str = "pooled_beta_ridge_v0.4.0"
+    uncapped_expected_excess_return_5d: float = 0.0
+    uncapped_expected_excess_return_20d: float = 0.0
+    forecast_cap_reason_5d: Optional[str] = None
+    forecast_cap_reason_20d: Optional[str] = None
+    model_version: str = FORECAST_MODEL_VERSION
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)
@@ -185,6 +190,31 @@ def _aligned_series(
         [asset[date].volume for date in dates],
         [benchmark[date].close for date in dates],
     )
+
+
+def history_integrity_issues(
+    histories: Mapping[str, Sequence[DailyBar]], max_daily_close_ratio: float
+) -> Dict[str, List[str]]:
+    """Identify series with discontinuities too large for model-safe returns."""
+    lower = 1.0 / max_daily_close_ratio
+    issues: Dict[str, List[str]] = {}
+    for symbol, bars in histories.items():
+        ordered = sorted(bars, key=lambda bar: bar.begins_at)
+        found: List[str] = []
+        for previous, current in zip(ordered, ordered[1:]):
+            if previous.close <= 0 or current.close <= 0:
+                found.append("nonpositive_close")
+                continue
+            ratio = current.close / previous.close
+            if ratio < lower or ratio > max_daily_close_ratio:
+                found.append(
+                    f"close_ratio={ratio:.6g}@{previous.begins_at[:10]}->{current.begins_at[:10]}"
+                )
+            if len(found) >= 5:
+                break
+        if found:
+            issues[symbol] = found
+    return issues
 
 
 def _solve(matrix: List[List[float]], vector: List[float]) -> List[float]:
@@ -333,12 +363,16 @@ def fit_ridge_model(
 
 
 def build_training_samples(
-    histories: Mapping[str, Sequence[DailyBar]], horizon: int
+    histories: Mapping[str, Sequence[DailyBar]], horizon: int,
+    max_daily_close_ratio: float = 3.0,
 ) -> List[Tuple[str, Tuple[float, ...], float]]:
     benchmark = histories.get("SPY") or []
+    integrity = history_integrity_issues(histories, max_daily_close_ratio)
+    if "SPY" in integrity:
+        raise ValueError(f"Benchmark history failed integrity checks: {integrity['SPY']}")
     samples: List[Tuple[str, Tuple[float, ...], float]] = []
     for symbol, bars in histories.items():
-        if symbol == "SPY":
+        if symbol == "SPY" or symbol in integrity:
             continue
         dates, closes, volumes, benchmark_closes = _aligned_series(bars, benchmark)
         for index in range(60, len(dates) - horizon):
@@ -446,6 +480,7 @@ def _date_clustered_probability_interval(
     prediction: float,
     validation_errors: Sequence[float],
     validation_dates: Sequence[str],
+    prior_date_blocks: int,
 ) -> Tuple[float, float]:
     by_date: Dict[str, List[float]] = {}
     for date, error in zip(validation_dates, validation_errors):
@@ -456,7 +491,10 @@ def _date_clustered_probability_interval(
     center = fmean(rates)
     variance = sum((value - center) ** 2 for value in rates) / (len(rates) - 1)
     margin = 1.96 * math.sqrt(variance / len(rates))
-    return (max(0.0, center - margin), min(1.0, center + margin))
+    evidence_weight = len(rates) / (len(rates) + prior_date_blocks)
+    lower = 0.5 + evidence_weight * (max(0.0, center - margin) - 0.5)
+    upper = 0.5 + evidence_weight * (min(1.0, center + margin) - 0.5)
+    return (lower, upper)
 
 
 def forecast_assets(
@@ -464,8 +502,12 @@ def forecast_assets(
     models: Optional[Mapping[str, RidgeModel]] = None,
 ) -> Tuple[List[AssetForecast], Dict[str, RidgeModel]]:
     if models is None:
-        samples_5 = build_training_samples(histories, 5)
-        samples_20 = build_training_samples(histories, 20)
+        samples_5 = build_training_samples(
+            histories, 5, settings.max_daily_close_ratio
+        )
+        samples_20 = build_training_samples(
+            histories, 20, settings.max_daily_close_ratio
+        )
         fitted_models = {
             "5d": fit_ridge_model(
                 samples_5, 5, settings.ridge_penalty, settings.min_training_samples,
@@ -483,10 +525,13 @@ def forecast_assets(
     else:
         fitted_models = dict(models)
     models = fitted_models
+    integrity = history_integrity_issues(histories, settings.max_daily_close_ratio)
+    if "SPY" in integrity:
+        raise ValueError(f"Benchmark history failed integrity checks: {integrity['SPY']}")
     benchmark = histories.get("SPY") or []
     forecasts: List[AssetForecast] = []
     for symbol, bars in histories.items():
-        if symbol == "SPY" or len(bars) < settings.min_history_bars:
+        if symbol == "SPY" or symbol in integrity or len(bars) < settings.min_history_bars:
             continue
         dates, closes, volumes, benchmark_closes = _aligned_series(bars, benchmark)
         if len(dates) < settings.min_history_bars:
@@ -496,11 +541,11 @@ def forecast_assets(
         raw_20 = models["20d"].predict(features)
         raw_expected_5 = settings.shrinkage * raw_5
         raw_expected_20 = settings.shrinkage * raw_20
-        expected_5 = raw_expected_5 + models["5d"].applied_validation_bias
-        expected_20 = raw_expected_20 + models["20d"].applied_validation_bias
+        uncapped_expected_5 = raw_expected_5 + models["5d"].applied_validation_bias
+        uncapped_expected_20 = raw_expected_20 + models["20d"].applied_validation_bias
         cap = settings.max_abs_forecast_20d
-        expected_20 = max(-cap, min(expected_20, cap))
-        expected_5 = max(-cap / 2.0, min(expected_5, cap / 2.0))
+        expected_20 = max(-cap, min(uncapped_expected_20, cap))
+        expected_5 = max(-cap / 2.0, min(uncapped_expected_5, cap / 2.0))
         uncertainty_5 = models["5d"].residual_std
         uncertainty_20 = models["20d"].residual_std
         signals = dict(zip(FEATURE_NAMES, features))
@@ -550,6 +595,7 @@ def forecast_assets(
                         raw_expected_5,
                         models["5d"].validation_errors,
                         models["5d"].validation_dates,
+                        settings.calibration_prior_date_blocks,
                     )
                 ),
                 probability_positive_excess_20d_interval=(
@@ -557,13 +603,68 @@ def forecast_assets(
                         raw_expected_20,
                         models["20d"].validation_errors,
                         models["20d"].validation_dates,
+                        settings.calibration_prior_date_blocks,
                     )
                 ),
                 calibration_date_blocks_5d=models["5d"].validation_date_blocks,
                 calibration_date_blocks_20d=models["20d"].validation_date_blocks,
+                uncapped_expected_excess_return_5d=uncapped_expected_5,
+                uncapped_expected_excess_return_20d=uncapped_expected_20,
+                forecast_cap_reason_5d=(
+                    "max_abs_forecast_5d" if expected_5 != uncapped_expected_5 else None
+                ),
+                forecast_cap_reason_20d=(
+                    "max_abs_forecast_20d" if expected_20 != uncapped_expected_20 else None
+                ),
             )
         )
     return forecasts, models
+
+
+def model_integrity_issues(
+    forecasts: Sequence[AssetForecast],
+    models: Mapping[str, RidgeModel],
+    settings: ForecastSettings,
+) -> List[str]:
+    """Return fail-closed model/forecast invariant violations."""
+    issues: List[str] = []
+    bounds = {
+        "5d": settings.max_uncertainty_5d,
+        "20d": settings.max_uncertainty_20d,
+    }
+    for horizon, maximum in bounds.items():
+        model = models[horizon]
+        if not math.isfinite(model.residual_std) or not 0 < model.residual_std <= maximum:
+            issues.append(
+                f"uncertainty_{horizon}_out_of_bounds={model.residual_std:.6g}>{maximum:.6g}"
+            )
+    for forecast in forecasts:
+        values = (
+            forecast.expected_excess_return_5d,
+            forecast.expected_excess_return_20d,
+            forecast.model_prediction_excess_return_5d,
+            forecast.model_prediction_excess_return_20d,
+            forecast.probability_positive_excess_5d,
+            forecast.probability_positive_excess_20d,
+        )
+        if not all(math.isfinite(value) for value in values):
+            issues.append(f"{forecast.symbol}:nonfinite_forecast")
+        if abs(forecast.model_prediction_excess_return_5d) > settings.max_abs_model_prediction_5d:
+            issues.append(f"{forecast.symbol}:raw_model_prediction_5d_out_of_bounds")
+        if abs(forecast.model_prediction_excess_return_20d) > settings.max_abs_model_prediction_20d:
+            issues.append(f"{forecast.symbol}:raw_model_prediction_20d_out_of_bounds")
+        for horizon, point, interval in (
+            ("5d", forecast.probability_positive_excess_5d,
+             forecast.probability_positive_excess_5d_interval),
+            ("20d", forecast.probability_positive_excess_20d,
+             forecast.probability_positive_excess_20d_interval),
+        ):
+            lower, upper = interval
+            if not 0 <= lower <= point <= upper <= 1:
+                issues.append(
+                    f"{forecast.symbol}:probability_ci_{horizon}_does_not_contain_point"
+                )
+    return sorted(set(issues))
 
 
 def candidate_forecasts(

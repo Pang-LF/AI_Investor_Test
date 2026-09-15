@@ -49,7 +49,7 @@ did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.6.1.yaml`](strategies/agentic/strategy_v0.6.1.yaml).
+[`strategies/agentic/strategy_v0.6.2.yaml`](strategies/agentic/strategy_v0.6.2.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
@@ -57,7 +57,7 @@ The full implemented data and decision flow is documented in
 ## Cost controls
 
 - One LLM call per decision; no LLM call on ordinary 15-minute monitor cycles.
-- Maximum 40,000 input and 2,400 output tokens.
+- Maximum 40,000 input and 4,000 output tokens.
 - Maximum $0.15 per call and $10 total LLM spend per month.
 - At most 18 research calls, including bounded SEC requests, and 50 total
   Robinhood MCP calls per decision run.

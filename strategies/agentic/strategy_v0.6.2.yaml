@@ -1,0 +1,99 @@
+strategy_id: agentic_single_account
+version: strategy_v0.6.2
+effective_date: 2026-09-15
+owner: system_and_user
+supersedes: strategy_v0.6.1
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan: {initial_usd: 1000, month_1_usd: 1000, month_2_usd: 1000}
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  active_observation_size: 60
+  full_candidate_funnel_logged: true
+
+prediction:
+  model: pooled_beta_ridge_v0.5.0
+  horizons_days: [5, 20]
+  units: decimal_returns
+  daily_snapshot: first_formal_decision_fits_later_decisions_reuse
+  history_integrity:
+    maximum_adjacent_close_ratio: 3.0
+    minimum_adjacent_close_ratio: 0.3333333333
+    action: quarantine_entire_symbol_before_training_and_prediction
+  forecast_reporting:
+    expose_uncapped_adjusted_forecast: true
+    expose_capped_adjusted_forecast: true
+    expose_cap_reason: true
+  applied_bias:
+    minimum_independent_date_blocks: 20
+    interval_crosses_zero: 0
+    interval_excludes_zero: endpoint_closest_to_zero
+  probability_calibration:
+    unit: independent_date_block_cross_sectional_win_rate
+    prior: 20_date_blocks_centered_at_50_percent
+    interval_uses_same_prior_shrinkage_as_point: true
+
+model_integrity_gate:
+  position: after_forecast_before_optimizer
+  fail_closed_status: model_integrity_blocked
+  on_failure: [retain_existing_positions, generate_zero_orders, continue_logging]
+  maximum_uncertainty_decimal: {5d: 0.30, 20d: 0.50}
+  maximum_absolute_raw_model_prediction_decimal: {5d: 0.30, 20d: 0.50}
+  invariants:
+    - all_forecast_fields_finite
+    - probability_ci_lower_lte_point_lte_upper
+    - benchmark_history_passes_discontinuity_check
+    - held_symbol_history_failure_cannot_force_exit
+
+decision_funnel:
+  research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    maximum_new_names: 5
+  investment_eligibility:
+    bias_adjusted_excess_return_20d_minimum: 0.005
+    calibrated_probability_positive_minimum: 0.55
+    edge_ratio_minimum: 0.15
+    minimum_prior_nonoverlapping_blocks: 5
+    llm_verdict: allow
+  holding:
+    bias_adjusted_excess_return_20d_minimum: -0.005
+    calibrated_probability_positive_minimum: 0.45
+    edge_ratio_minimum: -0.05
+    noncritical_exit_confirmation_runs: 2
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.3.1
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+
+portfolio:
+  horizon_days: 20
+  reallocation_cost_fraction: 0.004
+  risk_aversion: 8.0
+  uncertainty_penalty: 2.0
+  cash_is_valid: true
+  strategy_single_name_soft_cap: 0.35
+  strategy_sector_soft_cap: 0.50
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-15
+    changed_by: user_and_system
+    reason: Prevent corrupted split-like history from contaminating forecasts and portfolio optimization.
+    changes:
+      - quarantine_SHAZ_style_price_discontinuities_before_model_training
+      - add_model_scale_and_probability_interval_invariants
+      - fail_closed_before_optimizer_and_retain_existing_holdings
+      - report_uncapped_and_capped_forecasts_with_cap_reason
+      - invalidate_prior_daily_model_snapshot_via_model_version_fingerprint
+      - keep_hard_risk_and_investment_thresholds_unchanged
