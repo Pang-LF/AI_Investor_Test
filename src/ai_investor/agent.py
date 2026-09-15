@@ -703,6 +703,9 @@ def run_agent_cycle(
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
+                twenty_day_new_entry_live_enabled=(
+                    settings.forecast.twenty_day_new_entry_live_enabled
+                ),
                 pipeline_error=(
                     "MODEL_INTEGRITY_BLOCKED: " + "; ".join(integrity_issues)
                     if integrity_issues else None
@@ -730,6 +733,17 @@ def run_agent_cycle(
                 "execution_calibration_approved": (
                     settings.forecast.execution_calibration_approved
                 ),
+                "alpha_permissions": {
+                    "twenty_day_new_entry_live_enabled": (
+                        settings.forecast.twenty_day_new_entry_live_enabled
+                    ),
+                    "twenty_day_existing_position_management_enabled": (
+                        settings.forecast.twenty_day_existing_position_management_enabled
+                    ),
+                    "twenty_day_shadow_decisions_enabled": (
+                        settings.forecast.twenty_day_shadow_decisions_enabled
+                    ),
+                },
                 "portfolio_eligible_stocks": [item.symbol for item in eligible],
                 "entry_eligible_stocks": [item.symbol for item in entry_eligible],
                 "investment_eligibility_failures": investment_failures_by_symbol,

@@ -363,6 +363,38 @@ def execute_orders(
             )
             results.append({**summary, "status": "review_rejected"})
             continue
+        permission_shadow_status = None
+        if settings.mode == "LIVE":
+            if (
+                order.side == "buy"
+                and not settings.forecast.twenty_day_new_entry_live_enabled
+            ):
+                permission_shadow_status = "shadow_20d_buy_reviewed"
+            elif (
+                order.side == "sell"
+                and not settings.forecast.twenty_day_existing_position_management_enabled
+            ):
+                permission_shadow_status = "shadow_20d_sell_reviewed"
+        if permission_shadow_status:
+            ledger.upsert_order(
+                ref_id=order.ref_id,
+                decision_key=order.decision_key,
+                trading_date=trading_date,
+                mode=settings.mode,
+                symbol=order.symbol,
+                side=order.side,
+                order_type=settings.execution.order_type,
+                quantity=arguments.get("quantity"),
+                dollar_amount=arguments.get("dollar_amount"),
+                planned_notional=order.planned_notional,
+                status=permission_shadow_status,
+                response={
+                    "review": review,
+                    "execution_permission": permission_shadow_status,
+                },
+            )
+            results.append({**summary, "status": permission_shadow_status})
+            continue
         if settings.mode != "LIVE":
             ledger.upsert_order(
                 ref_id=order.ref_id, decision_key=order.decision_key, trading_date=trading_date,

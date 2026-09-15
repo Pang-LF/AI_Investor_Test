@@ -1,0 +1,111 @@
+strategy_id: agentic_single_account
+version: strategy_v0.6.3
+effective_date: 2026-09-15
+owner: system_and_user
+supersedes: strategy_v0.6.2
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  capital_plan: {initial_usd: 1000, month_1_usd: 1000, month_2_usd: 1000}
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  interval_minutes: 15
+  total_symbols: 60
+  context_only_etfs: 12
+  investable_observation_slots: 48
+  full_candidate_funnel_logged: true
+  immutable_point_in_time_universe_snapshots: true
+
+prediction:
+  model: pooled_beta_ridge_v0.5.0
+  horizons_days: [5, 20]
+  status: research_and_shadow_only_for_new_capital
+  units: decimal_returns
+  daily_snapshot: first_formal_decision_fits_later_decisions_reuse
+  history_integrity:
+    maximum_adjacent_close_ratio: 3.0
+    minimum_adjacent_close_ratio: 0.3333333333
+    action: quarantine_entire_symbol_before_training_and_prediction
+  applied_bias:
+    minimum_independent_date_blocks: 20
+    interval_crosses_zero: 0
+    interval_excludes_zero: endpoint_closest_to_zero
+  probability_calibration:
+    unit: independent_date_block_cross_sectional_win_rate
+    prior: 20_date_blocks_centered_at_50_percent
+    status: shadow_diagnostic_not_live_permission
+
+decision_funnel:
+  research:
+    raw_expected_excess_return_20d_minimum: 0.005
+    raw_probability_positive_minimum: 0.48
+    maximum_new_names: 5
+  provisional_investment_eligibility_for_shadow:
+    bias_adjusted_excess_return_20d_minimum: 0.005
+    calibrated_probability_positive_minimum: 0.55
+    edge_ratio_minimum: 0.15
+    minimum_prior_nonoverlapping_blocks: 5
+    llm_verdict: allow
+  holding:
+    bias_adjusted_excess_return_20d_minimum: -0.005
+    calibrated_probability_positive_minimum: 0.45
+    edge_ratio_minimum: -0.05
+    noncritical_exit_confirmation_runs: 2
+
+alpha_execution_permissions:
+  twenty_day_new_entry_live_enabled: false
+  twenty_day_existing_position_management_enabled: true
+  twenty_day_shadow_decisions_enabled: true
+  buy_definition: any_buy_including_increasing_an_existing_position
+  enforcement_position: after_hard_risk_and_broker_review_before_placement
+  shadow_buy_status: shadow_20d_buy_reviewed
+  shadow_buys_consume_live_order_limits: false
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.3.1
+  role: information_gap_and_thesis_risk_reviewer
+  may_create_alpha_from_narrative: false
+
+portfolio:
+  horizon_days: 20
+  reallocation_cost_fraction: 0.004
+  risk_aversion: 8.0
+  uncertainty_penalty: 2.0
+  cash_is_valid: true
+  strategy_single_name_soft_cap: 0.35
+  strategy_sector_soft_cap: 0.50
+  output_status: complete_hypothetical_target
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+audit_response:
+  corrected_investable_universe: exclude_12_context_only_etfs
+  diagnostics_added:
+    - daily_cross_sectional_forecast_buckets
+    - extreme_forecast_feature_distance
+    - research_depth_counterfactuals
+    - conditional_probability_within_forecast_rank
+    - daily_rank_ic
+    - moving_block_bootstrap_interval
+    - nonoverlapping_rank_ic
+    - random_market_cap_sector_liquidity_matched_universe_benchmarks
+  interpretation: current_20d_ranking_skill_not_established
+  event_engine_status: planned_shadow_only_not_implemented_in_this_version
+
+change_log:
+  - changed_at: 2026-09-15
+    changed_by: user_and_system
+    reason: Pause 20D model-driven LIVE buying while preserving research and existing-position management.
+    changes:
+      - block_all_20d_buy_placement_in_execution_layer
+      - retain_live_reduction_and_exit_capability_for_existing_positions
+      - retain_complete_shadow_targets_and_broker_reviews
+      - correct_audit_to_48_investable_slots
+      - add_alpha_attribution_rank_ic_extreme_forecast_and_matched_universe_diagnostics
+      - keep_hard_risk_policy_unchanged

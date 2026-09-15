@@ -172,6 +172,9 @@ class ForecastSettings:
     research_min_raw_probability_positive: float
     research_min_raw_expected_excess_return_20d: float
     execution_calibration_approved: bool
+    twenty_day_new_entry_live_enabled: bool
+    twenty_day_existing_position_management_enabled: bool
+    twenty_day_shadow_decisions_enabled: bool
     execution_min_calibrated_probability_positive: float
     execution_min_bias_adjusted_excess_return_20d: float
     execution_min_edge_ratio_20d: float
@@ -209,6 +212,15 @@ class ForecastSettings:
             ),
             execution_calibration_approved=bool(
                 raw["execution_calibration_approved"]
+            ),
+            twenty_day_new_entry_live_enabled=bool(
+                raw["twenty_day_new_entry_live_enabled"]
+            ),
+            twenty_day_existing_position_management_enabled=bool(
+                raw["twenty_day_existing_position_management_enabled"]
+            ),
+            twenty_day_shadow_decisions_enabled=bool(
+                raw["twenty_day_shadow_decisions_enabled"]
             ),
             execution_min_calibrated_probability_positive=float(
                 raw["execution_min_calibrated_probability_positive"]
@@ -259,6 +271,13 @@ class ForecastSettings:
             raise RuntimeError("Research probability threshold must be in (0, 1)")
         if not 0 < settings.execution_min_calibrated_probability_positive < 1:
             raise RuntimeError("Execution probability threshold must be in (0, 1)")
+        if (
+            settings.twenty_day_new_entry_live_enabled
+            and not settings.execution_calibration_approved
+        ):
+            raise RuntimeError(
+                "20D LIVE entries require an approved execution calibration"
+            )
         if settings.execution_min_calibration_date_blocks < 5:
             raise RuntimeError("Execution calibration needs at least five non-overlapping blocks")
         if settings.execution_min_edge_ratio_20d < 0:

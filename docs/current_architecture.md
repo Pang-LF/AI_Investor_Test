@@ -21,7 +21,7 @@ The top-level sequence is:
 6. Public research collection and one structured LLM call.
 7. Portfolio optimization with cash.
 8. Fresh-quote, price-drift, account, and hard-risk validation.
-9. Robinhood order review and, only when all LIVE gates hold, placement.
+9. Robinhood order review, followed by an engine-specific execution-permission gate.
 10. Order ledger update, concise decision log, and email summary.
 
 ## Fifteen-minute observation cycle
@@ -143,8 +143,9 @@ least 48%; Dynamic/Event names can enter research without passing that gate.
 This is permission to spend research cost, never permission to buy. Current
 holdings are added first so they receive explicit retain/exit review.
 
-Entry and holding rules are asymmetric. A new position must pass the full Level
-2 entry gate. An existing position can remain eligible down to -0.5% adjusted
+Entry and holding rules are asymmetric. A hypothetical new position must pass
+the full Level 2 entry gate before appearing in the 20D shadow target. An existing
+position can remain eligible down to -0.5% adjusted
 20-day alpha, 45% calibrated probability, and -0.05 edge ratio. A non-critical
 quantitative or `insufficient_evidence` exit signal must occur in two distinct
 decision runs before it can force liquidation; the first signal places a floor
@@ -155,7 +156,8 @@ SQLite.
 Level 2 requires at least 0.5% bias-adjusted 20-day alpha, 55% calibrated
 probability, a 0.15 expected-alpha/uncertainty ratio, at least five
 non-overlapping calibration blocks, and no LLM veto. These provisional thresholds
-were enabled on 2026-09-11 after a 22-block expanding walk-forward diagnostic.
+remain active for shadow measurement but no longer authorize a LIVE buy.
+They were originally enabled on 2026-09-11 after a 22-block expanding walk-forward diagnostic.
 That diagnostic uses a static current universe and is therefore affected by
 survivorship and selection bias; the live ledger must replace it with prospective
 evidence. The thresholds are protective floors, not a proven optimal policy.
@@ -170,9 +172,10 @@ weight, and final order/no-order disposition. This makes trigger attrition and
 bucket contribution measurable instead of reconstructing them from the final
 five names.
 
-Level 3, once enabled, makes eligible names compete with current holdings, other
+Level 3 makes eligible names compete with current holdings, other
 candidates, and cash in the optimizer. No research or LLM story alone can create
-a quantitative edge.
+a quantitative edge. Under strategy v0.6.3 its target portfolio is a complete
+shadow record: 20D buys cannot proceed to LIVE placement.
 
 ## Persistent security state and active research
 
@@ -220,7 +223,7 @@ separate 600-second decision-age gate rejects a result that arrives too late.
 The LLM cannot set a forecast, weight, quantity, order type, risk limit, or place
 an order. A name that is missing from the response, vetoed, or marked
 insufficient cannot enter the calibrated execution layer. The system allows one LLM call per
-decision, 40,000 input tokens, 2,400 output tokens, $0.15 per call, and $10 per
+decision, 40,000 input tokens, 4,000 output tokens, $0.15 per call, and $10 per
 month. Ordinary monitor cycles use no LLM tokens.
 
 ## Portfolio construction
@@ -279,6 +282,15 @@ Robinhood's nonplacing review runs next. A deterministic UUID derived from the
 decision, symbol, side, and notional is sent only with placement. Retrying uses
 the same UUID. SQLite records planned, reviewed, submitted, filled, rejected, and
 reconciled states; later cycles compare broker-reported fills with positions.
+
+Strategy v0.6.3 adds an execution permission below the optimizer and broker
+review. `twenty_day_new_entry_live_enabled = false` makes every 20D buy
+shadow-only, including an increase to an existing position. The reviewed
+hypothetical is logged as `shadow_20d_buy_reviewed` and does not consume the
+daily LIVE order or turnover limits. With
+`twenty_day_existing_position_management_enabled = true`, reductions and exits
+of existing positions may still proceed through all LIVE gates. Monitoring,
+research, forecasting, and hypothetical target generation remain enabled.
 
 Actual placement additionally requires all of:
 

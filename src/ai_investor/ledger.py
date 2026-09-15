@@ -298,7 +298,9 @@ class Ledger:
             FROM orders
             WHERE trading_date=? AND status NOT IN (
                 'blocked','cancelled','rejected','failed',
-                'review_rejected','review_failed','placement_failed'
+                'review_rejected','review_failed','placement_failed',
+                'hypothetical_reviewed','shadow_20d_buy_reviewed',
+                'shadow_20d_sell_reviewed'
             )
             """,
             (trading_date,),
@@ -311,7 +313,9 @@ class Ledger:
             SELECT COUNT(*) AS count FROM orders
             WHERE trading_date=? AND status NOT IN (
                 'blocked','cancelled','rejected','failed',
-                'review_rejected','review_failed','placement_failed'
+                'review_rejected','review_failed','placement_failed',
+                'hypothetical_reviewed','shadow_20d_buy_reviewed',
+                'shadow_20d_sell_reviewed'
             )
             """,
             (trading_date,),

@@ -10,11 +10,11 @@ about 6.12% compounded every month (about 104% annualized) to reach $100,000 at
 month 60. That hurdle is extraordinarily high and implies a substantial chance
 of permanent capital loss.
 
-Current deployment mode: **LIVE-capable and config-enabled**. It reads real
+Current deployment mode: **LIVE monitoring with 20D entries shadow-only**. It reads real
 market/account data, trains the forecast, runs bounded LLM research, optimizes
 the target portfolio, applies hard risk, and calls Robinhood's order-review tool.
-It still cannot place an order unless the local persistent account- and
-hard-risk-bound authorization is valid.
+The current 20D engine cannot place buy orders. Existing-position reductions or
+exits still require the local persistent account- and hard-risk-bound authorization.
 
 ## Decision architecture
 
@@ -44,12 +44,16 @@ Every 15 minutes during regular US market hours:
 7. A deterministic UUID suppresses duplicate submissions. Robinhood review runs
    before placement; later cycles reconcile broker order states into SQLite.
 
+The 20D optimizer continues to produce complete hypothetical targets. Reviewed
+20D buys are logged as `shadow_20d_buy_reviewed` and never reach Robinhood's
+placement tool; existing-position reductions and exits remain LIVE-capable.
+
 Every decision log contains a 60-slot candidate funnel showing why each symbol
 did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.6.2.yaml`](strategies/agentic/strategy_v0.6.2.yaml).
+[`strategies/agentic/strategy_v0.6.3.yaml`](strategies/agentic/strategy_v0.6.3.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).

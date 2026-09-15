@@ -274,6 +274,16 @@ def main() -> None:
                 ),
                 "new_order_generation_enabled": (
                     settings.forecast.execution_calibration_approved
+                    and settings.forecast.twenty_day_new_entry_live_enabled
+                ),
+                "twenty_day_new_entry_live_enabled": (
+                    settings.forecast.twenty_day_new_entry_live_enabled
+                ),
+                "twenty_day_existing_position_management_enabled": (
+                    settings.forecast.twenty_day_existing_position_management_enabled
+                ),
+                "twenty_day_shadow_decisions_enabled": (
+                    settings.forecast.twenty_day_shadow_decisions_enabled
                 ),
             }
         except Exception as exc:

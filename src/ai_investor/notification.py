@@ -69,6 +69,7 @@ def build_decision_email(
     holding_decisions: Optional[Mapping[str, Mapping[str, Any]]] = None,
     portfolio_diagnostics: Optional[Mapping[str, Any]] = None,
     execution_calibration_approved: bool = True,
+    twenty_day_new_entry_live_enabled: bool = True,
     pipeline_error: Optional[str] = None,
 ) -> tuple[str, str]:
     verdicts = {
@@ -113,18 +114,23 @@ def build_decision_email(
         verdict = str(item.get("verdict", "missing_assessment"))
         rationale = str(item.get("concise_rationale", "No LLM rationale returned"))
         target = target_weights.get(forecast.symbol, 0.0)
+        order_status = order_statuses.get(forecast.symbol)
         holding_state = str(
             holding_statuses.get(forecast.symbol, {}).get("status", "")
         )
         if not execution_calibration_approved:
             action_reason = "NOT TRADED: execution calibration is not approved"
+        elif order_status == "shadow_20d_buy_reviewed":
+            action_reason = (
+                "SHADOW 20D BUY: broker review passed but LIVE placement is disabled; "
+                f"hypothetical target weight={target:.2%}"
+            )
         elif target > 0 and holding_state == "pending_exit_retained":
             action_reason = (
                 f"RETAINED_PENDING_EXIT_CONFIRMATION: "
                 f"target weight={target:.2%}"
             )
         elif target > 0 and holding_state == "holding_gate_passed":
-            order_status = order_statuses.get(forecast.symbol)
             if order_status == "submitted":
                 action_reason = (
                     f"REBALANCE_ORDER_SUBMITTED: target weight={target:.2%}"
@@ -231,6 +237,11 @@ def build_decision_email(
                 "Forecast calibration gate: PROVISIONALLY_ENABLED"
                 if execution_calibration_approved
                 else "Forecast calibration gate: RESEARCH_ONLY; orders blocked"
+            ),
+            (
+                "20D new-entry LIVE permission: ENABLED"
+                if twenty_day_new_entry_live_enabled
+                else "20D new-entry LIVE permission: DISABLED; buys remain shadow-only"
             ),
         ]
     )

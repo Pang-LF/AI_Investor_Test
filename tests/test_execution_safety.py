@@ -300,7 +300,14 @@ class ExecutionSafetyTests(unittest.TestCase):
                 raise AssertionError(name)
 
         settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
-        settings = replace(settings, mode="LIVE", live_trading=True)
+        settings = replace(
+            settings,
+            mode="LIVE",
+            live_trading=True,
+            forecast=replace(
+                settings.forecast, twenty_day_new_entry_live_enabled=True
+            ),
+        )
         now = datetime.now(timezone.utc)
         state = BrokerState("account", 1000, 1000, 0, 0, 0, ())
         order = plan_orders(
@@ -331,6 +338,77 @@ class ExecutionSafetyTests(unittest.TestCase):
                 row = ledger.get_order(order.ref_id)
                 self.assertEqual(row["status"], "filled")
                 self.assertEqual(row["average_fill_price"], 100.0)
+
+    def test_live_twenty_day_buy_is_shadow_only_while_sell_can_execute(self) -> None:
+        class FakeClient:
+            def __init__(self):
+                self.calls = []
+
+            def call_tool(self, name, arguments):
+                self.calls.append((name, dict(arguments)))
+                if name == "review_equity_order":
+                    return {"data": {"order_checks": {}}}
+                if name == "place_equity_order":
+                    return {"data": {"order": {"id": "broker-sell"}}}
+                raise AssertionError(name)
+
+        settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
+        settings = replace(settings, mode="LIVE", live_trading=True)
+        self.assertFalse(settings.forecast.twenty_day_new_entry_live_enabled)
+        self.assertTrue(
+            settings.forecast.twenty_day_existing_position_management_enabled
+        )
+        now = datetime.now(timezone.utc)
+        state = BrokerState(
+            "account", 1000, 500, 0, 0, 0,
+            (Position("HELD", 5, 500, sellable_quantity=5),),
+        )
+        orders = plan_orders(
+            decision_key="permission-split",
+            target_weights={"HELD": 0.4, "NEW": 0.1},
+            state=state,
+            prices={"HELD": 100, "NEW": 100},
+            minimum_trade_usd=10,
+        )
+        quotes = {
+            symbol: {
+                "last_trade_price": 100,
+                "bid_price": 99.9,
+                "ask_price": 100.1,
+                "venue_last_trade_time": now.isoformat(),
+            }
+            for symbol in ("HELD", "NEW")
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm_live(root, "account", settings)
+            with Ledger(root / "ledger.sqlite") as ledger:
+                client = FakeClient()
+                results = execute_orders(
+                    settings=settings,
+                    root=root,
+                    ledger=ledger,
+                    client=client,
+                    state=state,
+                    orders=orders,
+                    quotes=quotes,
+                    tradability={"HELD": True, "NEW": True},
+                    trading_date="2026-01-01",
+                    now=now,
+                    allowed_buy_symbols={"NEW"},
+                )
+                by_symbol = {item["symbol"]: item for item in results}
+                self.assertEqual(by_symbol["HELD"]["status"], "submitted")
+                self.assertEqual(
+                    by_symbol["NEW"]["status"], "shadow_20d_buy_reviewed"
+                )
+                placed_symbols = [
+                    arguments["symbol"]
+                    for name, arguments in client.calls
+                    if name == "place_equity_order"
+                ]
+                self.assertEqual(placed_symbols, ["HELD"])
+                self.assertEqual(ledger.daily_order_count("2026-01-01"), 1)
 
     def test_optimizer_respects_full_nav_and_position_caps(self) -> None:
         base = datetime(2026, 1, 1, tzinfo=timezone.utc)

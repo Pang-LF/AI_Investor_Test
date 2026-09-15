@@ -76,6 +76,31 @@ class NotificationTests(unittest.TestCase):
         self.assertIn("investment eligibility failed", body)
         self.assertIn("336/7, confidence=LOW", body)
 
+    def test_email_marks_live_buy_as_shadow_only(self) -> None:
+        forecast = AssetForecast(
+            "AAA", "2026-01-01", .01, .02, .55, .60, .10, .20, {}
+        )
+        research = ResearchResult(
+            model="gpt-5.6-terra",
+            assessment={"market_summary": "mixed", "candidates": [{
+                "symbol": "AAA", "verdict": "allow", "concise_rationale": "ok",
+            }]},
+            source_tools=(), input_tokens=1, output_tokens=1,
+            estimated_cost_usd=0.0, latency_seconds=1.0,
+        )
+        _, body = build_decision_email(
+            run_id="r", timestamp="2026-01-01T15:00:00Z", mode="LIVE",
+            portfolio_value=1000, cash=1000, quote_count=60, triggers=[],
+            intraday_market_summary={},
+            regime=MarketRegime("mixed", 0, 0, .2, .5),
+            forecasts=[forecast], research=research,
+            target_weights={"AAA": .1},
+            orders=[{"symbol": "AAA", "status": "shadow_20d_buy_reviewed"}],
+            timings={}, twenty_day_new_entry_live_enabled=False,
+        )
+        self.assertIn("SHADOW 20D BUY", body)
+        self.assertIn("20D new-entry LIVE permission: DISABLED", body)
+
     def test_intraday_tone_has_a_mixed_middle_state(self) -> None:
         self.assertEqual(
             classify_intraday_tone({"positive_breadth": .5,
