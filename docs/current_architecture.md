@@ -95,7 +95,7 @@ time-specific keys and suppresses duplicate decisions.
 
 ## Two-tier research coverage
 
-Strategy v0.9.0 keeps high-frequency Robinhood quote monitoring at 60 symbols,
+Strategy v0.10.0 keeps high-frequency Robinhood quote monitoring at 60 symbols,
 but uses the cached large-, mid-, small-, and event-scanner candidate lists to
 construct a separate 200-stock research universe for each formal decision.
 Current positions enter first; event and smaller-company candidates receive
@@ -119,6 +119,28 @@ Up to 25 broad names form the quantitative research shortlist. Current holdings
 and the top five remain in scope. A maximum of five names per run may receive
 fresh LLM research; when those top names already have valid cached assessments,
 the unused capacity rotates into previously unreviewed shortlist names.
+
+## Cross-sectional factor-rank challenger
+
+Strategy v0.10.0 computes `cross_sectional_factor_rank_v0.1` from the same 200
+completed-daily-bar histories. It is isolated from the LIVE candidate shortlist,
+LLM selection, optimizer, and execution path.
+
+For each shared completed data date, the challenger computes fixed-direction
+components for residual trend, channel/breakout position, five-day reversal,
+signed relative-volume confirmation, OBV confirmation, downside volatility, and
+drawdown pressure. Each component is winsorized at the 1st/99th cross-sectional
+percentiles and converted to a percentile rank. Components first average inside
+their declared family, then trend, reversal, volume, and risk receive one equal
+vote each. Recent performance can never flip a factor's declared sign.
+
+SQLite stores one row per engine version, formation date, and symbol, so three
+scheduled decisions on the same daily data remain one independent observation.
+Each row preserves the raw values, winsorized values, component ranks, family
+ranks, composite rank, contemporaneous Ridge rank, formation prices, and later
+5/10/20-day excess returns versus SPY. Diagnostics include family Spearman
+correlations, top-bucket overlap, Ridge/Composite Top-25 overlap, Rank IC by
+horizon, rank-bucket returns, and Top-25 turnover.
 
 Each per-symbol assessment is stored in SQLite for 390 minutes. Reuse requires
 the same trading date, model, prompt, daily forecast version, persistent event
@@ -210,7 +232,7 @@ five names.
 
 Level 3 makes eligible names compete with current holdings, other candidates,
 and cash in the optimizer. No research or LLM story alone can create a
-quantitative edge. Under strategy v0.9.0, reviewed 20D candidates from both the
+quantitative edge. Under strategy v0.10.0, reviewed 20D candidates from both the
 60-name monitor and 200-name daily research tier may proceed to LIVE placement.
 
 ## Shadow Event Engine
@@ -345,7 +367,7 @@ decision, symbol, side, and notional is sent only with placement. Retrying uses
 the same UUID. SQLite records planned, reviewed, submitted, filled, rejected, and
 reconciled states; later cycles compare broker-reported fills with positions.
 
-Strategy v0.9.0 sets `twenty_day_new_entry_live_enabled = true`; a quantitatively
+Strategy v0.10.0 sets `twenty_day_new_entry_live_enabled = true`; a quantitatively
 eligible, LLM-approved buy may proceed through fresh decision and execution
 quotes, tradability, hard risk, and broker review to placement. With
 `twenty_day_existing_position_management_enabled = true`, reductions and exits

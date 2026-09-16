@@ -98,6 +98,7 @@ def build_decision_email(
     portfolio_diagnostics: Optional[Mapping[str, Any]] = None,
     event_shadow_forecasts: Sequence[Mapping[str, Any]] = (),
     research_cache_summary: Optional[Mapping[str, Any]] = None,
+    factor_challenger_summary: Optional[Mapping[str, Any]] = None,
     execution_calibration_approved: bool = True,
     twenty_day_new_entry_live_enabled: bool = True,
     pipeline_error: Optional[str] = None,
@@ -139,6 +140,12 @@ def build_decision_email(
         "Research coverage/cache: "
         + json.dumps(
             dict(research_cache_summary or {}),
+            ensure_ascii=False,
+            default=str,
+        ),
+        "Factor-rank challenger (SHADOW only): "
+        + json.dumps(
+            dict(factor_challenger_summary or {}),
             ensure_ascii=False,
             default=str,
         ),

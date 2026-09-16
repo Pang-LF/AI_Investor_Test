@@ -126,6 +126,29 @@ class Ledger:
             CREATE INDEX IF NOT EXISTS event_shadow_resolution_idx
                 ON event_shadow_signals(trading_date, realized_excess_5d);
 
+            CREATE TABLE IF NOT EXISTS factor_rank_signals (
+                signal_id TEXT PRIMARY KEY,
+                first_run_id TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                formation_date TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                formation_price REAL NOT NULL,
+                benchmark_price REAL NOT NULL,
+                composite_score REAL NOT NULL,
+                composite_rank INTEGER NOT NULL,
+                ridge_score REAL NOT NULL,
+                ridge_rank INTEGER NOT NULL,
+                factors_json TEXT NOT NULL,
+                realized_excess_5d REAL,
+                realized_excess_10d REAL,
+                realized_excess_20d REAL,
+                resolved_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS factor_rank_resolution_idx
+                ON factor_rank_signals(
+                    engine_version, formation_date, realized_excess_20d
+                );
+
             CREATE TABLE IF NOT EXISTS research_assessment_cache (
                 symbol TEXT PRIMARY KEY,
                 context_signature TEXT NOT NULL,
@@ -430,6 +453,143 @@ class Ledger:
         rows = self.connection.execute(
             "SELECT * FROM event_shadow_signals ORDER BY trading_date, symbol"
         ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_factor_rank_signals(
+        self,
+        run_id: str,
+        snapshot: Mapping[str, Any],
+    ) -> int:
+        engine = str(snapshot.get("engine_version") or "unknown")
+        inserted = 0
+        for signal in snapshot.get("signals") or []:
+            symbol = str(signal.get("symbol") or "").upper()
+            formation_date = str(signal.get("data_as_of") or "")[:10]
+            if not symbol or not formation_date:
+                continue
+            signal_id = f"{engine}|{formation_date}|{symbol}"
+            cursor = self.connection.execute(
+                """
+                INSERT OR IGNORE INTO factor_rank_signals(
+                    signal_id, first_run_id, engine_version, formation_date,
+                    symbol, formation_price, benchmark_price, composite_score,
+                    composite_rank, ridge_score, ridge_rank, factors_json
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    signal_id,
+                    run_id,
+                    engine,
+                    formation_date,
+                    symbol,
+                    float(signal.get("formation_price") or 0.0),
+                    float(signal.get("benchmark_price") or 0.0),
+                    float(signal.get("composite_score") or 0.0),
+                    int(signal.get("composite_rank") or 0),
+                    float(signal.get("ridge_score") or 0.0),
+                    int(signal.get("ridge_rank") or 0),
+                    self._json({
+                        "raw_factors": signal.get("raw_factors") or {},
+                        "winsorized_factors": (
+                            signal.get("winsorized_factors") or {}
+                        ),
+                        "factor_percentile_ranks": (
+                            signal.get("factor_percentile_ranks") or {}
+                        ),
+                        "family_ranks": signal.get("family_ranks") or {},
+                    }),
+                ),
+            )
+            inserted += int(cursor.rowcount > 0)
+        self.connection.commit()
+        return inserted
+
+    def resolve_factor_rank_signals(
+        self,
+        histories: Mapping[str, Sequence[Any]],
+        *,
+        engine_version: str,
+    ) -> int:
+        rows = self.connection.execute(
+            """
+            SELECT * FROM factor_rank_signals
+            WHERE engine_version=? AND realized_excess_20d IS NULL
+            ORDER BY formation_date, symbol
+            """,
+            (engine_version,),
+        ).fetchall()
+        benchmark = histories.get("SPY") or []
+        benchmark_by_date = {
+            str(bar.begins_at)[:10]: float(bar.close) for bar in benchmark
+        }
+        changed = 0
+        for row in rows:
+            formation_price = float(row["formation_price"])
+            benchmark_price = float(row["benchmark_price"])
+            if formation_price <= 0 or benchmark_price <= 0:
+                continue
+            bars = histories.get(str(row["symbol"])) or []
+            future = [
+                bar for bar in bars
+                if str(bar.begins_at)[:10] > str(row["formation_date"])
+                and str(bar.begins_at)[:10] in benchmark_by_date
+            ]
+
+            def realized(horizon: int) -> Optional[float]:
+                if len(future) < horizon:
+                    return None
+                bar = future[horizon - 1]
+                date = str(bar.begins_at)[:10]
+                return (
+                    float(bar.close) / formation_price - 1.0
+                    - (benchmark_by_date[date] / benchmark_price - 1.0)
+                )
+
+            values = {
+                horizon: (
+                    float(row[f"realized_excess_{horizon}d"])
+                    if row[f"realized_excess_{horizon}d"] is not None
+                    else realized(horizon)
+                )
+                for horizon in (5, 10, 20)
+            }
+            if all(value is None for value in values.values()):
+                continue
+            self.connection.execute(
+                """
+                UPDATE factor_rank_signals
+                SET realized_excess_5d=?, realized_excess_10d=?,
+                    realized_excess_20d=?, resolved_at=?
+                WHERE signal_id=?
+                """,
+                (
+                    values[5], values[10], values[20],
+                    (
+                        datetime.now(timezone.utc).isoformat()
+                        if values[20] is not None else None
+                    ),
+                    row["signal_id"],
+                ),
+            )
+            changed += 1
+        self.connection.commit()
+        return changed
+
+    def factor_rank_signals(
+        self, engine_version: Optional[str] = None
+    ) -> list[Dict[str, Any]]:
+        if engine_version is None:
+            rows = self.connection.execute(
+                "SELECT * FROM factor_rank_signals ORDER BY formation_date, symbol"
+            ).fetchall()
+        else:
+            rows = self.connection.execute(
+                """
+                SELECT * FROM factor_rank_signals
+                WHERE engine_version=? ORDER BY formation_date, symbol
+                """,
+                (engine_version,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def cached_research_assessments(

@@ -1,6 +1,6 @@
 mode = "LIVE"
 live_trading = true
-strategy_version = "strategy_v0.9.0"
+strategy_version = "strategy_v0.10.0"
 prompt_version = "research_v0.4.0"
 openai_model = "gpt-5.6-terra"
 max_input_tokens = 40000
@@ -105,6 +105,15 @@ minimum_absolute_move = 0.02
 strong_move_threshold = 0.08
 minimum_analog_samples = 30
 shrinkage_prior_samples = 50
+
+[factor_challenger]
+enabled = true
+live_entry_enabled = false
+shortlist_size = 25
+winsor_lower = 0.01
+winsor_upper = 0.99
+top_bucket_fraction = 0.10
+minimum_cross_section_size = 100
 
 [portfolio]
 max_invested_fraction = 1.0

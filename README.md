@@ -64,13 +64,20 @@ did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.9.0.yaml`](strategies/agentic/strategy_v0.9.0.yaml).
+[`strategies/agentic/strategy_v0.10.0.yaml`](strategies/agentic/strategy_v0.10.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
 The reviewed QuantSkills methods and the reasons external factor code was not
 copied directly into LIVE are recorded in
 [`docs/quantskills_review.md`](docs/quantskills_review.md).
+
+Strategy v0.10.0 also records a strictly shadow-only
+`cross_sectional_factor_rank_v0.1` challenger. It winsorizes and percentile-ranks
+seven point-in-time components, combines them inside four independent families,
+then gives trend, reversal, volume, and risk one equal vote each. Ridge and
+challenger ranks are persisted side by side with later 5/10/20-day outcomes.
+The challenger has no optimizer or order-generation path.
 
 ## Cost controls
 

@@ -21,6 +21,7 @@ from .execution import (
     execution_toolset,
     fetch_broker_state,
 )
+from .factor_challenger import ENGINE_VERSION, evaluate_factor_rank_rows
 from .health import (
     classify_operational_failure,
     clear_operational_failures,
@@ -90,6 +91,7 @@ def main() -> None:
     )
     subparsers.add_parser("live-status")
     subparsers.add_parser("event-shadow-status")
+    subparsers.add_parser("factor-challenger-status")
     subparsers.add_parser("research-cache-status")
     subparsers.add_parser("disarm-live")
     args = parser.parse_args()
@@ -293,6 +295,10 @@ def main() -> None:
                 "event_engine_live_entry_enabled": (
                     settings.event_engine.live_entry_enabled
                 ),
+                "factor_challenger_enabled": settings.factor_challenger.enabled,
+                "factor_challenger_live_entry_enabled": (
+                    settings.factor_challenger.live_entry_enabled
+                ),
             }
         except Exception as exc:
             payload = {
@@ -339,6 +345,26 @@ def main() -> None:
             ),
             "assessment_ttl_minutes": settings.research.assessment_ttl_minutes,
             **payload,
+        }, indent=2))
+    elif args.command == "factor-challenger-status":
+        with Ledger(ROOT / ".local" / "state" / "ledger.sqlite") as ledger:
+            rows = ledger.factor_rank_signals(ENGINE_VERSION)
+        print(json.dumps({
+            "enabled": settings.factor_challenger.enabled,
+            "live_entry_enabled": settings.factor_challenger.live_entry_enabled,
+            **evaluate_factor_rank_rows(rows),
+            "latest": [
+                {
+                    "formation_date": row["formation_date"],
+                    "symbol": row["symbol"],
+                    "composite_rank": row["composite_rank"],
+                    "ridge_rank": row["ridge_rank"],
+                    "realized_excess_5d": row["realized_excess_5d"],
+                    "realized_excess_10d": row["realized_excess_10d"],
+                    "realized_excess_20d": row["realized_excess_20d"],
+                }
+                for row in rows[-25:]
+            ],
         }, indent=2))
     elif args.command == "disarm-live":
         path = ROOT / ".local" / "state" / "live_arm.json"

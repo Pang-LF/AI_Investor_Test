@@ -44,7 +44,7 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
-No daily terminal command is required after this. Strategy v0.9.0 keeps monitoring,
+No daily terminal command is required after this. Strategy v0.10.0 keeps monitoring,
 forecasting, research, optimization, and LIVE execution active, with
 `twenty_day_new_entry_live_enabled = true`. Quantitatively eligible, LLM-approved
 20D candidates from the 200-stock tier can reach placement after all execution
@@ -57,6 +57,17 @@ change which abnormal movers receive the bounded research call, but it does not
 enter portfolio optimization. Its first signal per symbol/day is stored with
 the contemporaneous price, SPY price, beta, forecast distribution, and later
 realized 1-/5-day excess returns.
+
+The factor-rank challenger is also independently fixed to
+`live_entry_enabled = false`. Inspect its accumulated point-in-time evidence with:
+
+```bash
+.venv/bin/ai-investor factor-challenger-status
+```
+
+This reports Ridge versus composite Rank IC, family Rank IC, rank-bucket returns,
+Top-25 turnover, and the latest resolved 5/10/20-day outcomes. It cannot create a
+target weight or order.
 
 The 15-minute monitor still requests quotes for exactly 60 symbols. Formal
 decisions additionally construct a 200-stock daily-bar research universe from

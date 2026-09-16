@@ -21,6 +21,11 @@ from .execution import (
     reconcile_orders,
 )
 from .event_engine import build_event_shadow_forecasts
+from .factor_challenger import (
+    ENGINE_VERSION as FACTOR_CHALLENGER_VERSION,
+    build_factor_rank_snapshot,
+    evaluate_factor_rank_rows,
+)
 from .forecasting import (
     calibration_diagnostics,
     candidate_forecasts,
@@ -346,6 +351,57 @@ def run_agent_cycle(
                 item for item in broad_forecasts
                 if item.symbol not in broad_quarantine_symbols
             ]
+            factor_challenger_payload: Dict[str, Any] = {
+                "status": "disabled",
+                "engine_version": FACTOR_CHALLENGER_VERSION,
+                "live_entry_enabled": False,
+            }
+            if settings.factor_challenger.enabled:
+                try:
+                    challenger_snapshot = build_factor_rank_snapshot(
+                        broad_forecast_histories,
+                        broad_forecasts,
+                        shortlist_size=settings.factor_challenger.shortlist_size,
+                        winsor_lower=settings.factor_challenger.winsor_lower,
+                        winsor_upper=settings.factor_challenger.winsor_upper,
+                        top_bucket_fraction=(
+                            settings.factor_challenger.top_bucket_fraction
+                        ),
+                    )
+                    if (
+                        len(challenger_snapshot.signals)
+                        < settings.factor_challenger.minimum_cross_section_size
+                    ):
+                        raise ValueError(
+                            "Factor challenger cross-section is smaller than "
+                            f"{settings.factor_challenger.minimum_cross_section_size}"
+                        )
+                    resolved_factor_rows = ledger.resolve_factor_rank_signals(
+                        broad_forecast_histories,
+                        engine_version=FACTOR_CHALLENGER_VERSION,
+                    )
+                    inserted_factor_rows = ledger.record_factor_rank_signals(
+                        run_id, challenger_snapshot.to_dict()
+                    )
+                    challenger_evaluation = evaluate_factor_rank_rows(
+                        ledger.factor_rank_signals(FACTOR_CHALLENGER_VERSION)
+                    )
+                    factor_challenger_payload = {
+                        "status": "shadow_recorded",
+                        **challenger_snapshot.to_dict(),
+                        "inserted_rows": inserted_factor_rows,
+                        "resolved_rows": resolved_factor_rows,
+                        "evaluation": challenger_evaluation,
+                    }
+                except Exception as exc:
+                    # A challenger is observational only. Its failure must be
+                    # visible in logs/email but cannot change the LIVE portfolio.
+                    factor_challenger_payload = {
+                        "status": "shadow_failed",
+                        "engine_version": FACTOR_CHALLENGER_VERSION,
+                        "live_entry_enabled": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
             monitor_quotes = _quote_map(monitor_payload)
             event_shadow_forecasts = build_event_shadow_forecasts(
                 histories=forecast_histories,
@@ -508,6 +564,7 @@ def run_agent_cycle(
                     },
                     "model_snapshot": model_snapshot,
                     "candidate_funnel": candidate_funnel,
+                    "factor_rank_challenger": factor_challenger_payload,
                 }
                 ledger.record_run(
                     run_id=run_id, decision_key=decision_key, trading_date=trading_date,
@@ -965,6 +1022,11 @@ def run_agent_cycle(
                     "ttl_minutes": settings.research.assessment_ttl_minutes,
                     "forecast_quarantine": sorted(broad_quarantine_symbols),
                 },
+                factor_challenger_summary={
+                    key: value
+                    for key, value in factor_challenger_payload.items()
+                    if key not in {"signals"}
+                },
                 execution_calibration_approved=(
                     settings.forecast.execution_calibration_approved
                 ),
@@ -1016,6 +1078,7 @@ def run_agent_cycle(
                     "new_signals": event_shadow_insertions,
                     "updated_realizations": event_shadow_resolutions,
                 },
+                "factor_rank_challenger": factor_challenger_payload,
                 "broad_research_universe": {
                     "size": len(broad_entries),
                     "forecast_count": len(broad_forecasts),

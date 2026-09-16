@@ -370,6 +370,40 @@ class EventEngineSettings:
 
 
 @dataclass(frozen=True)
+class FactorChallengerSettings:
+    enabled: bool
+    live_entry_enabled: bool
+    shortlist_size: int
+    winsor_lower: float
+    winsor_upper: float
+    top_bucket_fraction: float
+    minimum_cross_section_size: int
+
+    @classmethod
+    def from_dict(cls, raw: Dict[str, Any]) -> "FactorChallengerSettings":
+        settings = cls(
+            enabled=bool(raw["enabled"]),
+            live_entry_enabled=bool(raw["live_entry_enabled"]),
+            shortlist_size=int(raw["shortlist_size"]),
+            winsor_lower=float(raw["winsor_lower"]),
+            winsor_upper=float(raw["winsor_upper"]),
+            top_bucket_fraction=float(raw["top_bucket_fraction"]),
+            minimum_cross_section_size=int(raw["minimum_cross_section_size"]),
+        )
+        if settings.live_entry_enabled:
+            raise RuntimeError("The factor-rank challenger must remain shadow-only")
+        if settings.shortlist_size != 25:
+            raise RuntimeError("The factor-rank shadow shortlist must contain 25 names")
+        if not 0 <= settings.winsor_lower < settings.winsor_upper <= 1:
+            raise RuntimeError("Factor challenger winsor bounds are invalid")
+        if not 0.05 <= settings.top_bucket_fraction <= 0.20:
+            raise RuntimeError("Top-bucket fraction must be between 5% and 20%")
+        if settings.minimum_cross_section_size < 50:
+            raise RuntimeError("Factor challenger requires at least fifty names")
+        return settings
+
+
+@dataclass(frozen=True)
 class PortfolioSettings:
     max_invested_fraction: float
     soft_max_position_fraction: float
@@ -577,6 +611,7 @@ class Settings:
     forecast: ForecastSettings
     research: ResearchSettings
     event_engine: EventEngineSettings
+    factor_challenger: FactorChallengerSettings
     portfolio: PortfolioSettings
     risk: RiskSettings
     execution: ExecutionSettings
@@ -631,6 +666,9 @@ class Settings:
             forecast=ForecastSettings.from_dict(raw["forecast"]),
             research=ResearchSettings.from_dict(raw["research"]),
             event_engine=EventEngineSettings.from_dict(raw["event_engine"]),
+            factor_challenger=FactorChallengerSettings.from_dict(
+                raw["factor_challenger"]
+            ),
             portfolio=PortfolioSettings.from_dict(raw["portfolio"]),
             risk=RiskSettings.from_dict(raw["risk"]),
             execution=ExecutionSettings.from_dict(raw["execution"]),
