@@ -339,7 +339,7 @@ class ExecutionSafetyTests(unittest.TestCase):
                 self.assertEqual(row["status"], "filled")
                 self.assertEqual(row["average_fill_price"], 100.0)
 
-    def test_live_twenty_day_buy_is_shadow_only_while_sell_can_execute(self) -> None:
+    def test_live_twenty_day_buy_and_sell_can_execute(self) -> None:
         class FakeClient:
             def __init__(self):
                 self.calls = []
@@ -354,7 +354,7 @@ class ExecutionSafetyTests(unittest.TestCase):
 
         settings = Settings.load(Path(__file__).parents[1] / "config" / "settings.toml")
         settings = replace(settings, mode="LIVE", live_trading=True)
-        self.assertFalse(settings.forecast.twenty_day_new_entry_live_enabled)
+        self.assertTrue(settings.forecast.twenty_day_new_entry_live_enabled)
         self.assertTrue(
             settings.forecast.twenty_day_existing_position_management_enabled
         )
@@ -399,16 +399,14 @@ class ExecutionSafetyTests(unittest.TestCase):
                 )
                 by_symbol = {item["symbol"]: item for item in results}
                 self.assertEqual(by_symbol["HELD"]["status"], "submitted")
-                self.assertEqual(
-                    by_symbol["NEW"]["status"], "shadow_20d_buy_reviewed"
-                )
+                self.assertEqual(by_symbol["NEW"]["status"], "submitted")
                 placed_symbols = [
                     arguments["symbol"]
                     for name, arguments in client.calls
                     if name == "place_equity_order"
                 ]
-                self.assertEqual(placed_symbols, ["HELD"])
-                self.assertEqual(ledger.daily_order_count("2026-01-01"), 1)
+                self.assertEqual(placed_symbols, ["HELD", "NEW"])
+                self.assertEqual(ledger.daily_order_count("2026-01-01"), 2)
 
     def test_optimizer_respects_full_nav_and_position_caps(self) -> None:
         base = datetime(2026, 1, 1, tzinfo=timezone.utc)

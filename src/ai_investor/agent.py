@@ -753,7 +753,7 @@ def run_agent_cycle(
             quantitatively_entry_eligible = investment_candidate_forecasts(
                 llm_reviewed,
                 settings.forecast,
-                allowed_symbols=core_investable_symbols,
+                allowed_symbols=investable_symbols,
             )
             entry_eligible = quantitatively_entry_eligible
             investment_failures_by_symbol = {
@@ -762,11 +762,6 @@ def run_agent_cycle(
                 )
                 for item in llm_reviewed
             }
-            for item in llm_reviewed:
-                if item.symbol not in core_investable_symbols:
-                    investment_failures_by_symbol[item.symbol].append(
-                        "broad_research_shadow_only"
-                    )
             if integrity_issues:
                 for item in llm_reviewed:
                     investment_failures_by_symbol.setdefault(item.symbol, []).append(
@@ -846,6 +841,13 @@ def run_agent_cycle(
                     "reasons": reason_parts,
                 }
             eligible = list(eligible_by_symbol.values())
+            # Broad-universe candidates are discovered from completed daily bars,
+            # but LIVE decisions must establish a fresh decision-time quote before
+            # optimization. A second quote is fetched immediately before execution
+            # and the hard risk engine rejects excessive drift between the two.
+            decision_quotes = _fresh_execution_quotes(
+                client, sorted({item.symbol for item in eligible})
+            ) if eligible else {}
             sectors = {
                 str(item.get("symbol", "")).upper(): str(item.get("sector", ""))
                 for item in analysis_entries
@@ -870,7 +872,7 @@ def run_agent_cycle(
             elif settings.forecast.execution_calibration_approved:
                 target = optimize_portfolio(
                     eligible,
-                    forecast_histories,
+                    broad_forecast_histories,
                     settings.portfolio,
                     settings.risk,
                     sectors,
@@ -887,7 +889,12 @@ def run_agent_cycle(
                     else 1.0,
                     objective_value=0.0,
                 )
-            prices = {symbol: float(item.get("last_trade_price") or 0) for symbol, item in monitor_quotes.items()}
+            reference_quotes = dict(monitor_quotes)
+            reference_quotes.update(decision_quotes)
+            prices = {
+                symbol: float(item.get("last_trade_price") or 0)
+                for symbol, item in reference_quotes.items()
+            }
             orders = [] if integrity_issues else plan_orders(
                 decision_key=decision_key, target_weights=target.weights, state=state,
                 prices=prices, minimum_trade_usd=settings.portfolio.min_trade_usd,
@@ -908,7 +915,7 @@ def run_agent_cycle(
                 trading_date=trading_date, now=datetime.now(timezone.utc),
                 allowed_buy_symbols={
                     str(item.get("symbol", "")).upper()
-                    for item in entries
+                    for item in analysis_entries
                     if item.get("investable", True)
                 },
                 decision_started_at=current,

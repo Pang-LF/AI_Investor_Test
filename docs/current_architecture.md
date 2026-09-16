@@ -95,7 +95,7 @@ time-specific keys and suppresses duplicate decisions.
 
 ## Two-tier research coverage
 
-Strategy v0.8.0 keeps high-frequency Robinhood quote monitoring at 60 symbols,
+Strategy v0.9.0 keeps high-frequency Robinhood quote monitoring at 60 symbols,
 but uses the cached large-, mid-, small-, and event-scanner candidate lists to
 construct a separate 200-stock research universe for each formal decision.
 Current positions enter first; event and smaller-company candidates receive
@@ -109,10 +109,11 @@ still trained and frozen from the original 60-name observation universe's
 investable core and SPY benchmark, then the frozen model is applied to the broad
 histories. Consequently, expanding discovery cannot alter
 same-day coefficients, calibration, or the forecast used for an existing LIVE
-holding. A name outside the 60-symbol core is labelled
-`broad_research_shadow_only` and cannot enter the shared portfolio optimizer.
-This prevents a hypothetical broad buy from causing a real sale that raises cash
-for an order the shadow gate would refuse to place.
+holding. After quantitative eligibility and an LLM `allow`, a name outside the
+60-symbol core may enter the shared LIVE optimizer. The system obtains a fresh
+decision quote for every eligible name and another fresh quote immediately before
+execution; the hard risk engine rejects stale, wide-spread, untradable, or
+materially drifted orders.
 
 Up to 25 broad names form the quantitative research shortlist. Current holdings
 and the top five remain in scope. A maximum of five names per run may receive
@@ -207,10 +208,10 @@ weight, and final order/no-order disposition. This makes trigger attrition and
 bucket contribution measurable instead of reconstructing them from the final
 five names.
 
-Level 3 makes eligible names compete with current holdings, other
-candidates, and cash in the optimizer. No research or LLM story alone can create
-a quantitative edge. Under strategy v0.8.0 its new-buy target portfolio is a complete
-shadow record: 20D buys cannot proceed to LIVE placement.
+Level 3 makes eligible names compete with current holdings, other candidates,
+and cash in the optimizer. No research or LLM story alone can create a
+quantitative edge. Under strategy v0.9.0, reviewed 20D candidates from both the
+60-name monitor and 200-name daily research tier may proceed to LIVE placement.
 
 ## Shadow Event Engine
 
@@ -344,14 +345,12 @@ decision, symbol, side, and notional is sent only with placement. Retrying uses
 the same UUID. SQLite records planned, reviewed, submitted, filled, rejected, and
 reconciled states; later cycles compare broker-reported fills with positions.
 
-Strategy v0.8.0 retains the execution permission introduced in v0.6.3 below the optimizer and broker
-review. `twenty_day_new_entry_live_enabled = false` makes every 20D buy
-shadow-only, including an increase to an existing position. The reviewed
-hypothetical is logged as `shadow_20d_buy_reviewed` and does not consume the
-daily LIVE order or turnover limits. With
+Strategy v0.9.0 sets `twenty_day_new_entry_live_enabled = true`; a quantitatively
+eligible, LLM-approved buy may proceed through fresh decision and execution
+quotes, tradability, hard risk, and broker review to placement. With
 `twenty_day_existing_position_management_enabled = true`, reductions and exits
-of existing positions may still proceed through all LIVE gates. Monitoring,
-research, forecasting, and hypothetical target generation remain enabled.
+of existing positions may also proceed through all LIVE gates. Monitoring,
+research, forecasting, and complete decision logging remain enabled.
 
 Actual placement additionally requires all of:
 

@@ -47,27 +47,30 @@ Every 15 minutes during regular US market hours:
    LLM assessments are cached for 390 minutes and reused when the prompt/model,
    trading date, durable event state, and material price-event band are unchanged.
    Unused LLM capacity rotates through new names from a 25-stock shortlist.
-5. A long-only covariance-shrinkage optimizer uses 35% per-name and 50%
-   per-sector strategy soft caps and creates target weights including cash.
+5. A long-only covariance-shrinkage optimizer lets each eligible name and sector
+   use up to 100% of NAV and creates target weights including cash.
    No-trade and 100% cash are valid outputs. Existing holdings use lower hold
    thresholds and two-run confirmation for non-critical exits.
 6. The independent hard-risk engine checks the target and fresh execution quote.
 7. A deterministic UUID suppresses duplicate submissions. Robinhood review runs
    before placement; later cycles reconcile broker order states into SQLite.
 
-The 20D optimizer continues to produce complete hypothetical targets. Reviewed
-20D buys are logged as `shadow_20d_buy_reviewed` and never reach Robinhood's
-placement tool; existing-position reductions and exits remain LIVE-capable.
+Reviewed, quantitatively eligible 20D candidates from the 200-stock research
+universe may enter the LIVE optimizer and reach Robinhood placement after fresh
+quotes, tradability, hard-risk checks, and Robinhood's nonplacing order review.
 
 Every decision log contains a 60-slot candidate funnel showing why each symbol
 did or did not progress through research, LLM review, eligibility, optimization,
 and order generation.
 
 The versioned strategy is
-[`strategies/agentic/strategy_v0.8.0.yaml`](strategies/agentic/strategy_v0.8.0.yaml).
+[`strategies/agentic/strategy_v0.9.0.yaml`](strategies/agentic/strategy_v0.9.0.yaml).
 The hard-risk policy is separate in [`config/settings.toml`](config/settings.toml).
 The full implemented data and decision flow is documented in
 [`docs/current_architecture.md`](docs/current_architecture.md).
+The reviewed QuantSkills methods and the reasons external factor code was not
+copied directly into LIVE are recorded in
+[`docs/quantskills_review.md`](docs/quantskills_review.md).
 
 ## Cost controls
 

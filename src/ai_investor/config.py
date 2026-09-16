@@ -396,8 +396,8 @@ class PortfolioSettings:
         )
         if not 0 < settings.max_invested_fraction <= 1:
             raise RuntimeError("max_invested_fraction must be in (0, 1]")
-        if not 0 < settings.soft_max_position_fraction <= 0.50:
-            raise RuntimeError("Strategy soft position cap must remain in (0, 0.50]")
+        if not 0 < settings.soft_max_position_fraction <= 1.0:
+            raise RuntimeError("Strategy soft position cap must remain in (0, 1]")
         if not settings.soft_max_position_fraction <= settings.soft_max_sector_fraction <= 1:
             raise RuntimeError("Strategy sector cap must be between position cap and 100%")
         if settings.optimizer_iterations < 10:

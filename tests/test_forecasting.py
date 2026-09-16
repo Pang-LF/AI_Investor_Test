@@ -190,7 +190,7 @@ class ForecastingTests(unittest.TestCase):
         )
         self.assertEqual(investment_candidate_forecasts([forecast], settings), [])
 
-    def test_broad_shadow_name_cannot_enter_shared_optimizer(self) -> None:
+    def test_broad_name_enters_only_when_in_current_investable_universe(self) -> None:
         settings = Settings.load(Path("config/settings.toml")).forecast
         forecast = AssetForecast(
             symbol="BROAD", data_as_of="2026-09-10",

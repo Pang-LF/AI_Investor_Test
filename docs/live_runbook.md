@@ -44,14 +44,13 @@ that the account owner remains responsible for agent orders.
    .venv/bin/ai-investor live-status
    ```
 
-No daily terminal command is required after this. Strategy v0.8.0 keeps monitoring,
-forecasting, research, and hypothetical optimization active, but sets
-`twenty_day_new_entry_live_enabled = false`. Every 20D buy stops after Robinhood
-review and is recorded as `shadow_20d_buy_reviewed`; the placement tool is never
-called. Existing holdings use the lower hold gate and remain LIVE-manageable:
+No daily terminal command is required after this. Strategy v0.9.0 keeps monitoring,
+forecasting, research, optimization, and LIVE execution active, with
+`twenty_day_new_entry_live_enabled = true`. Quantitatively eligible, LLM-approved
+20D candidates from the 200-stock tier can reach placement after all execution
+checks. Existing holdings use the lower hold gate and remain LIVE-manageable:
 non-critical exit signals require two distinct decision runs, while a material
-LLM veto or critical data conflict can exit immediately. Increasing an existing
-position is also a buy and therefore remains shadow-only.
+LLM veto or critical data conflict can exit immediately.
 
 The Event Engine is independently fixed to `live_entry_enabled = false`. It may
 change which abnormal movers receive the bounded research call, but it does not

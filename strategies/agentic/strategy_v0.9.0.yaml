@@ -1,0 +1,107 @@
+strategy_id: agentic_single_account
+version: strategy_v0.9.0
+effective_date: 2026-09-16
+owner: system_and_user
+supersedes: strategy_v0.8.0
+
+objective:
+  target_value_usd: 100000
+  maximum_horizon_years: 5
+  note: The target is aspirational and never forces a trade.
+
+observation:
+  intraday_interval_minutes: 15
+  intraday_symbols: 60
+  context_only_etfs: 12
+  immutable_point_in_time_universe_snapshots: true
+
+broad_research:
+  quantitative_universe_size: 200
+  source: cached_robinhood_scanner_candidates
+  data_frequency: completed_daily_bars
+  model_application: frozen_core_model_from_60_name_monitor
+  quantitative_shortlist_size: 25
+  portfolio_optimizer_access: true
+  order_generation_access: true
+  live_access_requirement:
+    - positive_quantitative_investment_eligibility
+    - llm_allow
+    - fresh_decision_quote
+    - fresh_execution_quote
+    - broker_tradability
+    - hard_risk_approval
+    - robinhood_order_review
+  maximum_fresh_llm_symbols_per_run: 5
+  assessment_ttl_minutes: 390
+  cache_scope: per_symbol
+
+twenty_day_engine:
+  model: pooled_beta_ridge_v0.5.0
+  status: live_user_authorized
+  new_entry_live_enabled: true
+  existing_position_management_enabled: true
+  shadow_decisions_enabled: true
+  broad_new_entries_live_enabled: true
+  investment_eligibility_gates:
+    adjusted_alpha_20d_minimum: 0.005
+    calibrated_probability_minimum: 0.55
+    edge_ratio_minimum: 0.15
+  qualification_note: User explicitly authorized LIVE use despite weak historical ranking evidence.
+
+event_engine:
+  version: empirical_event_analog_v0.1
+  enabled: true
+  live_entry_enabled: false
+  portfolio_optimizer_access: false
+  order_generation_access: false
+  note: Event forecasts remain context because the current engine has no production portfolio adapter.
+
+portfolio:
+  maximum_invested_fraction: 1.0
+  strategy_soft_position_fraction: 1.0
+  strategy_soft_sector_fraction: 1.0
+  cash_competes_with_all_eligible_assets: true
+  note: Optimized weights may be below 100%; this is an optimizer result, not a position cap.
+
+qualitative_research:
+  base_model: gpt-5.6-terra
+  prompt_version: research_v0.4.0
+  maximum_llm_calls_per_decision: 1
+  repeated_unchanged_assessment: reuse_cache
+  llm_may_veto_or_reduce_confidence: true
+  llm_may_create_quantitative_alpha: false
+
+execution:
+  decision_quote_required_for_broad_candidates: true
+  execution_quote_refetched_after_optimization: true
+  maximum_decision_to_execution_seconds: 600
+  maximum_decision_price_drift_fraction: 0.01
+  deterministic_order_ids: true
+  broker_review_before_placement: true
+
+external_methodology:
+  source: https://github.com/quantskills
+  incorporated_principles:
+    - separate_signal_portfolio_execution_layers
+    - rank_candidates_cross_sectionally
+    - use_cost_aware_portfolio_competition
+    - distinguish_decision_and_execution_prices
+    - preserve_order_idempotency_and_reconciliation
+  copied_external_strategy_code: false
+  note: QuantSkills claims are not treated as validation on this US-equity universe.
+
+hard_risk_policy:
+  reference: hard_risk_v1.3
+  independently_enforced: true
+  changed_in_this_strategy_version: false
+
+change_log:
+  - changed_at: 2026-09-16
+    changed_by: user_and_system
+    reason: Give reviewed opportunities from the expanded universe direct LIVE access without a conservative strategy-level position cap.
+    changes:
+      - enable_20d_new_live_entries
+      - grant_broad_research_candidates_optimizer_and_order_access
+      - raise_strategy_soft_position_and_sector_caps_to_100_percent
+      - require_fresh_decision_and_execution_quotes_for_broad_candidates
+      - retain_all_hard_risk_execution_and_reconciliation_controls
