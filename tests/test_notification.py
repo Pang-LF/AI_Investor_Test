@@ -42,7 +42,8 @@ class NotificationTests(unittest.TestCase):
             regime=MarketRegime("mixed", .01, .02, .2, .5), forecasts=forecasts,
             research=research, target_weights={"AAA": .5}, orders=[], timings={},
         )
-        self.assertIn("AAA", subject)
+        self.assertIn("NO TRADE", subject)
+        self.assertNotIn("AAA", subject)
         self.assertIn("SELECTED: target weight=50.00%", body)
         self.assertIn("NOT SELECTED: LLM verdict=veto", body)
 
@@ -100,6 +101,31 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertIn("SHADOW 20D BUY", body)
         self.assertIn("20D new-entry LIVE permission: DISABLED", body)
+
+    def test_subject_reports_orders_not_retained_target_names(self) -> None:
+        forecast = AssetForecast(
+            "STALE", "2026-01-01", .01, .02, .55, .60, .10, .20, {}
+        )
+        research = ResearchResult(
+            model="gpt-5.6-terra",
+            assessment={"market_summary": "", "candidates": [{
+                "symbol": "STALE", "verdict": "allow", "concise_rationale": "hold",
+            }]},
+            source_tools=(), input_tokens=1, output_tokens=1,
+            estimated_cost_usd=0.0, latency_seconds=1.0,
+        )
+        subject, _ = build_decision_email(
+            run_id="r", timestamp="2026-01-01T15:00:00Z", mode="LIVE",
+            portfolio_value=1000, cash=500, quote_count=60, triggers=[],
+            intraday_market_summary={},
+            regime=MarketRegime("mixed", 0, 0, .2, .5),
+            forecasts=[forecast], research=research,
+            target_weights={"STALE": .5, "NEW": .5},
+            orders=[{"symbol": "NEW", "side": "buy", "status": "submitted"}],
+            timings={},
+        )
+        self.assertIn("BUY NEW", subject)
+        self.assertNotIn("STALE", subject)
 
     def test_intraday_tone_has_a_mixed_middle_state(self) -> None:
         self.assertEqual(

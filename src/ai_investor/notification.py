@@ -39,6 +39,34 @@ def _calibration_confidence(blocks: int) -> str:
     return "HIGH"
 
 
+def _subject_action(orders: Sequence[Mapping[str, Any]]) -> str:
+    """Summarize this run's order outcome, never the retained target portfolio."""
+    submitted_statuses = {"submitted", "filled", "partially_filled"}
+    submitted = []
+    shadow = []
+    blocked = []
+    for item in orders:
+        symbol = str(item.get("symbol") or item.get("ticker") or "").upper()
+        side = str(item.get("side") or "ORDER").upper()
+        status = str(item.get("status") or "unknown").lower()
+        if not symbol:
+            continue
+        label = f"{side} {symbol}"
+        if status in submitted_statuses:
+            submitted.append(label)
+        elif status.startswith("shadow_") or status == "hypothetical_reviewed":
+            shadow.append(label)
+        elif status not in {"duplicate_suppressed"}:
+            blocked.append(symbol)
+    if submitted:
+        return "; ".join(submitted)
+    if shadow:
+        return "SHADOW " + "; ".join(shadow)
+    if blocked:
+        return "ORDER BLOCKED " + ", ".join(sorted(set(blocked)))
+    return "NO TRADE"
+
+
 def require_email_configuration() -> SMTPConfig:
     config = get_smtp_config()
     if config is None:
@@ -263,10 +291,7 @@ def build_decision_email(
     )
     if pipeline_error:
         lines.extend(["", "Post-LLM pipeline error: " + pipeline_error])
-    selected = ", ".join(
-        sorted(symbol for symbol, weight in target_weights.items() if weight > 0)
-    ) or "CASH"
-    subject = f"[AI Investor] {mode} decision {selected} | {timestamp[:16]}"
+    subject = f"[AI Investor] {mode} | {_subject_action(orders)} | {timestamp[:16]}"
     return subject, "\n".join(lines)
 
 
